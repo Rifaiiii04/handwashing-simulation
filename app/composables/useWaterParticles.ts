@@ -68,24 +68,24 @@ export function createWaterParticleSystem(
   geometry.setAttribute("position", positionAttribute);
   geometry.setAttribute("size", sizeAttribute);
 
-const material = new THREE.ShaderMaterial({
-  transparent: true,
-  depthWrite: false,
-  blending: THREE.AdditiveBlending,
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
 
-  uniforms: {
-    uColor: {
-      value: new THREE.Color(config.color),
+    uniforms: {
+      uColor: {
+        value: new THREE.Color(config.color),
+      },
+      uOpacity: {
+        value: config.opacity,
+      },
+      uSize: {
+        value: 40.0,
+      },
     },
-    uOpacity: {
-      value: config.opacity,
-    },
-    uSize: {
-      value: 40.0,
-    },
-  },
 
-  vertexShader: `
+    vertexShader: `
     uniform float uSize;
 
     void main() {
@@ -97,7 +97,7 @@ const material = new THREE.ShaderMaterial({
     }
   `,
 
-  fragmentShader: `
+    fragmentShader: `
     uniform vec3 uColor;
     uniform float uOpacity;
 
@@ -122,7 +122,7 @@ const material = new THREE.ShaderMaterial({
       );
     }
   `,
-});
+  });
 
   const points = new THREE.Points(geometry, material);
   points.frustumCulled = false;
@@ -188,10 +188,14 @@ const material = new THREE.ShaderMaterial({
     return oldest;
   }
 
+  const previousPosition = new THREE.Vector3();
+  const nextPosition = new THREE.Vector3();
+
   function update(
     delta: number,
     spawnWorldPos: THREE.Vector3,
     spawnSource?: THREE.Object3D,
+    checkCollision?: (from: THREE.Vector3, to: THREE.Vector3) => boolean,
   ) {
     const clampedDelta = Math.min(delta, 0.05);
 
@@ -202,6 +206,10 @@ const material = new THREE.ShaderMaterial({
       const idx = findDeadParticle();
       resetParticle(idx, spawnWorldPos, spawnSource);
     }
+
+    const lifetime = config.particleLifetime;
+    const particleSize = config.particleSize;
+    const gravity = config.gravity;
 
     for (let i = 0; i < count; i++) {
       const p = particles[i];
@@ -218,18 +226,33 @@ const material = new THREE.ShaderMaterial({
         continue;
       }
 
-      p.velocityY += config.gravity * clampedDelta;
+      p.velocityY += gravity * clampedDelta;
 
       const currentX = positions[idx3] ?? 0;
       const currentY = positions[idx3 + 1] ?? 0;
       const currentZ = positions[idx3 + 2] ?? 0;
 
-      positions[idx3] = currentX + p.velocityX * clampedDelta;
-      positions[idx3 + 1] = currentY + p.velocityY * clampedDelta;
-      positions[idx3 + 2] = currentZ + p.velocityZ * clampedDelta;
+      previousPosition.set(currentX, currentY, currentZ);
 
-      const lifeRatio = p.age / config.particleLifetime;
-      sizes[i] = config.particleSize * (1 - lifeRatio * 0.3);
+      nextPosition.set(
+        currentX + p.velocityX * clampedDelta,
+        currentY + p.velocityY * clampedDelta,
+        currentZ + p.velocityZ * clampedDelta,
+      );
+
+      if (checkCollision?.(previousPosition, nextPosition)) {
+        p.alive = false;
+        positions[idx3 + 1] = -9999;
+        sizes[i] = 0;
+        continue;
+      }
+
+      positions[idx3] = nextPosition.x;
+      positions[idx3 + 1] = nextPosition.y;
+      positions[idx3 + 2] = nextPosition.z;
+
+      const lifeRatio = p.age / lifetime;
+      sizes[i] = particleSize * (1 - lifeRatio * 0.3);
     }
 
     positionAttribute.needsUpdate = true;
