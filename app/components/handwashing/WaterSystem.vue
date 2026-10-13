@@ -8,8 +8,6 @@ import {
   DEFAULT_WATER_CONFIG,
 } from "~/composables/useWaterParticles";
 import type { WaterParticleConfig } from "~/composables/useWaterParticles";
-import { createWaterCollision } from "~/composables/useWaterCollision";
-import type { WaterCollisionSystem } from "~/composables/useWaterCollision";
 
 const props = withDefaults(
   defineProps<{
@@ -27,7 +25,6 @@ const mergedConfig: WaterParticleConfig = {
 };
 
 const { scene } = useTres();
-let collisionSystem: WaterCollisionSystem | null = null;
 const waterSystem = createWaterParticleSystem(mergedConfig);
 const spawnPosition = new THREE.Vector3();
 const waterSpawnObject = ref<THREE.Object3D | null>(null);
@@ -43,10 +40,8 @@ function findWaterSpawn() {
   if (waterSpawn) {
     waterSpawnObject.value = waterSpawn;
     waterSpawn.getWorldPosition(spawnPosition);
+    waterSystem.points.position.copy(spawnPosition);
 
-    if (!collisionSystem) {
-      collisionSystem = createWaterCollision(scene.value, ["R_Hand", "L_Hand"]);
-    }
     isReady.value = true;
     if (!hasLoggedFound) {
       console.log("[WaterSystem] WaterSpawn found");
@@ -82,18 +77,15 @@ onBeforeRender(({ delta }) => {
     return;
   }
 
+  waterSystem.points.visible = props.active;
   if (!props.active) return;
 
   if (waterSpawnObject.value) {
     waterSpawnObject.value.getWorldPosition(spawnPosition);
   }
 
-  waterSystem.update(
-    delta,
-    spawnPosition,
-    waterSpawnObject.value ?? undefined,
-    collisionSystem?.checkSegment,
-  );
+  // Smooth GPU continuous stream update (zero allocations, 60fps)
+  waterSystem.update(delta, spawnPosition);
 });
 
 onUnmounted(() => {

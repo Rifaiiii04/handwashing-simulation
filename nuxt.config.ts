@@ -15,5 +15,14 @@ export default defineNuxtConfig({
       tailwindcss(),
     ]
   },
-  devtools: { enabled: true }
+  devtools: { enabled: false },
+
+  // Reduce memory pressure during dev server startup
+  experimental: {
+    appManifest: false,
+  },
+
+  nitro: {
+    sourceMap: false,
+  },
 })
