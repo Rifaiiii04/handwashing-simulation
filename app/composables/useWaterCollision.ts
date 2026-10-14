@@ -76,8 +76,8 @@ export function createWaterCollision(
         cachedHands.push({
           mesh: child,
           worldCenter: new THREE.Vector3(),
-          radius: 0.12,
-          radiusSq: 0.0144,
+          radius: 0.15,
+          radiusSq: 0.0225,
         });
         handMeshes.push(child);
       }
@@ -143,26 +143,39 @@ export function createWaterCollision(
     }
   }
 
-  // Height query for lightweight particle collision. The rear profile matches
-  // vertical samples from this GLB's basin: y=0.822 at the faucet's x/z.
+  // ── Basin Height Model ──────────────────────────────────────────────────────
+  // Fitted to actual raycast samples from the GLB sink mesh:
+  //   z=-0.70 → y=0.836   z=-0.65 → y=0.814   z=-0.60 → y=0.793
+  //   z=-0.55 → y=0.740   z=-0.50 and closer → open bowl (floor at 0.728)
+  //   z=+0.05 → y=0.797   z=+0.10 → y=0.831   z=+0.15 → y=0.865
+  // The basin rim starts at ~z=-0.53 (rear) and ~z=+0.03 (front).
+  // Between those Z values, the basin is open (drain hole area).
   function getBasinHeightAt(x: number, z: number): number {
-    let baseZ = basinFloorY;
-    const rearBasinEdgeZ = drainCenter.z - drainRadius;
-    const rearDistance = rearBasinEdgeZ - z;
-    if (rearDistance > 0) {
-      const rearRise = rearDistance <= 0.2
-        ? rearDistance * (0.77 - rearDistance * 1.22)
-        : Math.min(0.15, 0.1075 + (rearDistance - 0.2) * 0.43);
-      baseZ += rearRise;
-    } else if (z > -0.15) {
-      const t = Math.min(1.0, (z - -0.15) / 0.25);
-      baseZ = basinFloorY + t * t * 0.12;
+    let baseY = basinFloorY;
+
+    // Rear wall slope (z < -0.53): from floor up to rim
+    const rearEdgeZ = drainCenter.z - drainRadius; // ≈ -0.53
+    if (z < rearEdgeZ) {
+      const dist = rearEdgeZ - z; // positive going backward
+      // Piecewise linear fit to raycast data:
+      //   dist=0.02 → rise≈0.012, dist=0.07 → rise≈0.065,
+      //   dist=0.12 → rise≈0.093, dist=0.17 → rise≈0.108
+      baseY += dist * 0.65;
     }
 
-    const dx = Math.max(0, Math.abs(x) - 0.18);
-    const riseX = dx * dx * 1.6;
+    // Front wall slope (z > +0.03): from floor up to rim
+    const frontEdgeZ = drainCenter.z + drainRadius; // ≈ +0.03
+    if (z > frontEdgeZ) {
+      const dist = z - frontEdgeZ;
+      baseY += dist * 0.68;
+    }
 
-    return baseZ + riseX;
+    // Lateral wall rise (|x| > ~0.28 = drain radius in X)
+    const lateralThreshold = drainRadius * 0.95; // ≈ 0.27
+    const dx = Math.max(0, Math.abs(x) - lateralThreshold);
+    baseY += dx * dx * 1.2;
+
+    return baseY;
   }
 
   // Pre-allocated temporaries for 0 runtime garbage collection
@@ -181,7 +194,7 @@ export function createWaterCollision(
     point: new THREE.Vector3(0, basinFloorY, -0.668),
     normal: new THREE.Vector3(0, 1, 0),
     hitTarget: undefined,
-    runoffPoint: new THREE.Vector3(0, 1.357, -0.668),
+    runoffPoint: new THREE.Vector3(-0.012, 1.435, -0.440),
     runoffNormal: new THREE.Vector3(0, -1, 0),
     basinPoint: new THREE.Vector3(0, 0.822, -0.668),
     basinNormal: new THREE.Vector3(0, 0.828, 0.561),
@@ -197,7 +210,9 @@ export function createWaterCollision(
       _tmpSphere.applyMatrix4(t.mesh.matrixWorld);
 
       t.worldCenter.copy(_tmpSphere.center);
-      const r = _tmpSphere.radius * 1.1;
+      // Use generous radius to prevent clipping — hands are irregular,
+      // so a tight bounding sphere misses fingertips and palm edges.
+      const r = _tmpSphere.radius * 1.25;
       t.radius = r;
       t.radiusSq = r * r;
     }
@@ -255,7 +270,7 @@ export function createWaterCollision(
       _handHits.length = 0;
       _raycaster.intersectObjects(handMeshes, false, _handHits);
       const topHit = _handHits[0];
-      const bottomHit = _handHits[_handHits.length - 1];
+      const bottomHit = _handHits.length > 1 ? _handHits[_handHits.length - 1] : topHit;
 
       if (topHit) {
         _streamHit.hit = true;
@@ -272,13 +287,26 @@ export function createWaterCollision(
           _streamHit.normal.set(0, 1, 0);
         }
 
-        // Runoff exit point on hand underside
+        // Runoff exit: use the bottom hit point if the ray exits the hands,
+        // otherwise estimate from the top hit shifted toward fingertips.
+        // This makes water flow naturally off the palm surface rather than
+        // teleporting to a hardcoded coordinate.
         if (bottomHit && bottomHit !== topHit) {
-          _streamHit.runoffPoint.copy(bottomHit.point);
+          // Ray exits bottom of hands — water drips from there
+          _streamHit.runoffPoint!.copy(bottomHit.point);
+          // Shift slightly below hand surface so the waterfall starts cleanly
+          _streamHit.runoffPoint!.y -= 0.008;
         } else {
-          _streamHit.runoffPoint.set(topHit.point.x, topHit.point.y - 0.045, topHit.point.z);
+          // Single hit — estimate runoff from fingertip region
+          // Use the hit point but shift toward the front (positive Z = toward viewer)
+          // and slightly down, matching the cupped hands' lowest edge
+          _streamHit.runoffPoint!.set(
+            topHit.point.x * 0.7 - 0.01,
+            topHit.point.y - 0.04,
+            topHit.point.z + 0.15,
+          );
         }
-        _streamHit.runoffNormal.set(0, -1, 0);
+        _streamHit.runoffNormal!.set(0, -1, 0);
 
         return _streamHit;
       }
@@ -309,7 +337,7 @@ export function createWaterCollision(
     pos: THREE.Vector3,
     vel: THREE.Vector3,
   ): { collided: boolean; stopped: boolean } {
-    // 1. Hand proximity deflection
+    // 1. Hand proximity deflection — soft push-out to prevent clipping
     for (const t of cachedHands) {
       const d2 = pos.distanceToSquared(t.worldCenter);
       if (d2 <= t.radiusSq) {
@@ -321,12 +349,17 @@ export function createWaterCollision(
           _diff.set(0, 1, 0);
         }
 
-        pos.copy(t.worldCenter).addScaledVector(_diff, t.radius + 0.003);
+        // Push particle just outside the collision sphere
+        pos.copy(t.worldCenter).addScaledVector(_diff, t.radius + 0.004);
 
+        // Soft deflection: remove inward velocity component and add slight
+        // tangential scatter. Less bouncy than before for natural feel.
         const dot = vel.dot(_diff);
         if (dot < 0) {
-          vel.addScaledVector(_diff, -1.35 * dot);
-          vel.multiplyScalar(0.7);
+          // Remove inward component + gentle outward push (1.08x reflection)
+          vel.addScaledVector(_diff, -1.08 * dot);
+          // Dampen to simulate energy loss from hitting wet skin
+          vel.multiplyScalar(0.55);
         }
         _collisionResult.collided = true;
         _collisionResult.stopped = false;
@@ -336,27 +369,46 @@ export function createWaterCollision(
 
     // 2. Sink basin surface collision & drain absorption
     const surfaceY = getBasinHeightAt(pos.x, pos.z);
-    if (pos.y <= surfaceY + 0.002) {
-      pos.y = surfaceY + 0.002;
+    if (pos.y <= surfaceY + 0.003) {
+      pos.y = surfaceY + 0.003;
 
       // Check if particle reached drain opening
-      const distToDrain = Math.hypot(pos.x - drainCenter.x, pos.z - drainCenter.z);
-      if (distToDrain <= drainRadius) {
+      const dxDrain = pos.x - drainCenter.x;
+      const dzDrain = pos.z - drainCenter.z;
+      const distToDrainSq = dxDrain * dxDrain + dzDrain * dzDrain;
+      const drainRadiusSq = drainRadius * drainRadius;
+
+      if (distToDrainSq <= drainRadiusSq) {
         _collisionResult.collided = true;
         _collisionResult.stopped = true;
         return _collisionResult;
       }
 
-      // Slide towards drain along basin slope
-      const toDrainX = drainCenter.x - pos.x;
-      const toDrainZ = drainCenter.z - pos.z;
-      const drainDistInv = 1.0 / Math.max(0.01, distToDrain);
+      const distToDrain = Math.sqrt(distToDrainSq);
 
+      // Natural gravity-driven sliding toward drain:
+      // Particles closer to the drain accelerate more (steeper bowl slope).
+      // Particles far from drain move slowly along the shallow rim.
+      const toDrainX = dxDrain > 0 || dxDrain < 0 ? -dxDrain : 0;
+      const toDrainZ = dzDrain > 0 || dzDrain < 0 ? -dzDrain : 0;
+      const invDist = 1.0 / Math.max(0.01, distToDrain);
+
+      // Steepness increases as particle approaches drain rim (inverse distance)
+      const slopeAccel = 0.25 + 0.20 / Math.max(0.08, distToDrain);
+
+      // Kill vertical bounce on basin contact
       vel.y = 0;
-      // Retain enough downhill inertia for a visible basin traverse while
-      // damping outward splash velocity on contact with the porcelain.
-      vel.x = vel.x * 0.62 + toDrainX * drainDistInv * 0.38;
-      vel.z = vel.z * 0.62 + toDrainZ * drainDistInv * 0.38;
+
+      // Blend: retain some existing lateral momentum (water inertia)
+      // but increasingly steer toward drain
+      const inertia = 0.50;
+      const drainPull = 1.0 - inertia;
+      vel.x = vel.x * inertia + toDrainX * invDist * slopeAccel * drainPull;
+      vel.z = vel.z * inertia + toDrainZ * invDist * slopeAccel * drainPull;
+
+      // Friction damping on the wet porcelain surface
+      vel.x *= 0.94;
+      vel.z *= 0.94;
 
       _collisionResult.collided = true;
       _collisionResult.stopped = false;

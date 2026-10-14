@@ -11,6 +11,8 @@ import type { WaterParticleConfig } from "~/composables/useWaterParticles";
 import { createWaterCollision } from "~/composables/useWaterCollision";
 import type { StreamHit, WaterCollisionSystem } from "~/composables/useWaterCollision";
 
+// Physics updated: volumetric waterfall, continuous basin spread flowing into drain
+
 const props = withDefaults(
   defineProps<{
     config?: Partial<WaterParticleConfig>;
