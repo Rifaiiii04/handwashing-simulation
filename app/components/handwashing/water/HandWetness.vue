@@ -1,326 +1,316 @@
 <script setup lang="ts">
 import { inject, onMounted, onUnmounted } from "vue";
 import * as THREE from "three";
-import { WaterRuntimeKey, type WaterEffect, type WaterFrameState } from "./waterRuntime";
-import { createWaterMaterial, updateWaterMaterialTime } from "./waterMaterials";
+import { WaterRuntimeKey, type WaterEffect } from "./waterRuntime";
+import { createWaterMaterial, disposeWaterMaterial, updateWaterMaterial } from "./waterMaterials";
 
 const runtime = inject(WaterRuntimeKey);
 if (!runtime) throw new Error("HandWetness requires WaterSystem runtime");
 
-const surfaceRows = 20;
-const surfaceColumns = 5;
-const surfacePositions = new Float32Array(surfaceRows * surfaceColumns * 3);
-const surfaceUvs = new Float32Array(surfaceRows * surfaceColumns * 2);
-const surfaceIndices = new Uint16Array((surfaceRows - 1) * (surfaceColumns - 1) * 6);
-const surfaceGeometry = new THREE.BufferGeometry();
-const surfacePositionAttribute = new THREE.BufferAttribute(surfacePositions, 3).setUsage(THREE.DynamicDrawUsage);
-const surfaceNormalAttribute = new THREE.BufferAttribute(new Float32Array(surfacePositions.length), 3).setUsage(THREE.DynamicDrawUsage);
-const surfaceUvAttribute = new THREE.BufferAttribute(surfaceUvs, 2);
-let surfaceIndex = 0;
-for (let row = 0; row < surfaceRows; row++) {
-  for (let column = 0; column < surfaceColumns; column++) {
-    const vertex = row * surfaceColumns + column;
-    surfaceUvs[vertex * 2] = column / (surfaceColumns - 1);
-    surfaceUvs[vertex * 2 + 1] = row / (surfaceRows - 1);
-    if (row < surfaceRows - 1 && column < surfaceColumns - 1) {
-      const a = vertex;
-      const b = vertex + 1;
-      const c = vertex + surfaceColumns;
-      const d = c + 1;
-      surfaceIndices[surfaceIndex++] = a; surfaceIndices[surfaceIndex++] = c; surfaceIndices[surfaceIndex++] = b;
-      surfaceIndices[surfaceIndex++] = b; surfaceIndices[surfaceIndex++] = c; surfaceIndices[surfaceIndex++] = d;
-    }
-  }
+interface FoamPuff {
+  position: THREE.Vector3;
+  phase: number;
+  size: number;
 }
-surfaceGeometry.setAttribute("position", surfacePositionAttribute);
-surfaceGeometry.setAttribute("normal", surfaceNormalAttribute);
-surfaceGeometry.setAttribute("uv", surfaceUvAttribute);
-surfaceGeometry.setIndex(new THREE.BufferAttribute(surfaceIndices, 1));
-surfaceGeometry.setDrawRange(0, 0);
 
-const runoffSteps = 18;
-const runoffSides = 12;
-const runoffPositions = new Float32Array((runoffSteps + 1) * runoffSides * 3);
-const runoffUvs = new Float32Array((runoffSteps + 1) * runoffSides * 2);
-const runoffIndices = new Uint16Array(runoffSteps * runoffSides * 6);
-const runoffGeometry = new THREE.BufferGeometry();
-const runoffPositionAttribute = new THREE.BufferAttribute(runoffPositions, 3).setUsage(THREE.DynamicDrawUsage);
-const runoffNormalAttribute = new THREE.BufferAttribute(new Float32Array(runoffPositions.length), 3).setUsage(THREE.DynamicDrawUsage);
-let runoffIndex = 0;
-for (let row = 0; row <= runoffSteps; row++) {
-  for (let side = 0; side < runoffSides; side++) {
-    const vertex = row * runoffSides + side;
-    runoffUvs[vertex * 2] = side / runoffSides;
-    runoffUvs[vertex * 2 + 1] = row / runoffSteps;
-    if (row < runoffSteps) {
-      const nextSide = (side + 1) % runoffSides;
-      const a = vertex;
-      const b = row * runoffSides + nextSide;
-      const c = a + runoffSides;
-      const d = b + runoffSides;
-      runoffIndices[runoffIndex++] = a; runoffIndices[runoffIndex++] = c; runoffIndices[runoffIndex++] = b;
-      runoffIndices[runoffIndex++] = b; runoffIndices[runoffIndex++] = c; runoffIndices[runoffIndex++] = d;
-    }
-  }
+interface FoamBubble {
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  age: number;
+  lifetime: number;
+  size: number;
 }
-runoffGeometry.setAttribute("position", runoffPositionAttribute);
-runoffGeometry.setAttribute("normal", runoffNormalAttribute);
-runoffGeometry.setAttribute("uv", new THREE.BufferAttribute(runoffUvs, 2));
-runoffGeometry.setIndex(new THREE.BufferAttribute(runoffIndices, 1));
 
-const material = createWaterMaterial(runtime.config.color, runtime.config.opacity);
-const surface = new THREE.Mesh(surfaceGeometry, material);
-surface.name = "HandWetnessFlowSurface";
-surface.frustumCulled = false;
-surface.renderOrder = 2;
-const runoff = new THREE.Mesh(runoffGeometry, material);
-runoff.name = "HandRunoffStream";
-runoff.frustumCulled = false;
-runoff.renderOrder = 2;
+// The foam body is an instanced pile of small spheres, not one translucent
+// metaball shell. Dense overlap keeps the cloud filled while remaining cheap.
+const foamMaterial = createWaterMaterial(
+  "foam",
+  0xfffeff,
+  runtime.config.foamColor,
+  runtime.config.foamOpacity,
+);
+foamMaterial.emissive.set(0xffe8ef);
+foamMaterial.emissiveIntensity = 0.12;
+const foamPuffCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamPuffCount), 96, 160);
+foamMaterial.vertexColors = true;
+foamMaterial.needsUpdate = true;
+const foamPuffGeometry = new THREE.SphereGeometry(1, 16, 12);
+const foamPuffs = new THREE.InstancedMesh(foamPuffGeometry, foamMaterial, foamPuffCount);
+foamPuffs.name = "HandFoamPuffCluster";
+foamPuffs.count = foamPuffCount;
+foamPuffs.frustumCulled = false;
+foamPuffs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+const instanceMatrix = new THREE.Matrix4();
+const instanceColor = new THREE.Color();
+const foamWhiteTint = new THREE.Color(0xfffeff);
+const foamPinkTint = new THREE.Color(runtime.config.foamColor);
+const scratchPosition = new THREE.Vector3();
+const scratchScale = new THREE.Vector3();
+const identity = new THREE.Quaternion();
+
+let foamSeed = 81421;
+const foamRandom = (): number => {
+  foamSeed = (foamSeed * 16807) % 2147483647;
+  return foamSeed / 2147483647;
+};
+const foamPuffPool: FoamPuff[] = Array.from({ length: foamPuffCount }, (_, index) => {
+  const vertical = foamRandom() * 2 - 1;
+  const angle = foamRandom() * Math.PI * 2;
+  const centerBias = index < foamPuffCount * 0.35 ? 0.48 : 0.78;
+  const radius = Math.cbrt(foamRandom()) * centerBias;
+  const planarRadius = Math.sqrt(1 - vertical * vertical) * radius;
+  const sizeRoll = foamRandom();
+  const size = sizeRoll < 0.22
+    ? 0.34 + foamRandom() * 0.07
+    : sizeRoll < 0.7
+      ? 0.26 + foamRandom() * 0.08
+      : 0.19 + foamRandom() * 0.07;
+  return {
+    position: new THREE.Vector3(
+      Math.cos(angle) * planarRadius,
+      vertical * radius * 0.72,
+      Math.sin(angle) * planarRadius,
+    ),
+    phase: foamRandom() * Math.PI * 2,
+    // Three deterministic size bands create small, medium, and large puffs.
+    size,
+  };
+});
+for (let index = 0; index < foamPuffPool.length; index++) {
+  const puff = foamPuffPool[index]!;
+  const radialTint = THREE.MathUtils.clamp(puff.position.length() / 0.78, 0, 1);
+  const pinkAmount = THREE.MathUtils.clamp(0.015 + radialTint * 0.14 + foamRandom() * 0.06, 0.01, 0.22);
+  instanceColor.copy(foamWhiteTint).lerp(foamPinkTint, pinkAmount);
+  foamPuffs.setColorAt(index, instanceColor);
+}
+if (foamPuffs.instanceColor) foamPuffs.instanceColor.needsUpdate = true;
+
+const bubbleCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamBubbleCount), 12, 24);
+const bubbleGeometry = new THREE.SphereGeometry(0.065, 12, 10);
+const bubbleMaterial = createWaterMaterial("foam", 0xfffeff, runtime.config.foamColor, 0.88);
+bubbleMaterial.emissive.set(0xffe8ef);
+bubbleMaterial.emissiveIntensity = 0.12;
+bubbleMaterial.vertexColors = true;
+bubbleMaterial.needsUpdate = true;
+const bubbles = new THREE.InstancedMesh(bubbleGeometry, bubbleMaterial, bubbleCount);
+bubbles.name = "HandFoamBubblePool";
+bubbles.count = bubbleCount;
+bubbles.frustumCulled = false;
+bubbles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
 const object = new THREE.Group();
-object.name = "HandWetnessEffect";
-object.add(surface, runoff);
+object.name = "HandFoamEffect";
+object.matrixAutoUpdate = false;
+object.add(foamPuffs, bubbles);
 
-const down = new THREE.Vector3(0, -1, 0);
-const up = new THREE.Vector3(0, 1, 0);
-const tangent = new THREE.Vector3();
-const side = new THREE.Vector3();
-const center = new THREE.Vector3();
-const normal = new THREE.Vector3(0, 1, 0);
-const previousDirection = new THREE.Vector3();
-const sampleOrigin = new THREE.Vector3();
-const samplePoint = new THREE.Vector3();
-const sampleNormal = new THREE.Vector3();
-const sampleDirection = new THREE.Vector3();
-const candidate = new THREE.Vector3();
-const offset = new THREE.Vector3();
-const landing = new THREE.Vector3();
-const basinSample = new THREE.Vector3();
-const basinNormal = new THREE.Vector3(0, 1, 0);
-const tubeTangent = new THREE.Vector3();
-const tubeSide = new THREE.Vector3();
-const tubeUp = new THREE.Vector3();
-const lastContact = new THREE.Vector3(Infinity, Infinity, Infinity);
-const lastRunoffStart = new THREE.Vector3(Infinity, Infinity, Infinity);
-const lastRunoffEnd = new THREE.Vector3(Infinity, Infinity, Infinity);
-const lastRunoffDirection = new THREE.Vector3(Infinity, Infinity, Infinity);
-let lastMesh: THREE.Mesh | null = null;
-let lastRevision = -1;
-let activeRows = 0;
-let hasRunoffPath = false;
-const gravity = runtime.config.gravity ?? 9.81;
-const surfaceSpeed = 0.34;
-const surfaceHalfWidth = 0.026;
-const runoffRadius = 0.008;
+const anchorSize = new THREE.Vector3(2, 2, 2);
+const anchorCenter = new THREE.Vector3();
+const foamCenter = new THREE.Vector3();
+const foamFootprint = new THREE.Vector3(1, 1, 1);
+const handWorldBounds = new THREE.Box3();
+const handLocalBounds = new THREE.Box3();
+const handBoundsScratch = new THREE.Box3();
+const anchorWorldInverse = new THREE.Matrix4();
+const targetFoamSize = new THREE.Vector3();
 
-function buildHandPath(frame: WaterFrameState): boolean {
-  const collision = frame.collision;
-  const hit = frame.hit;
-  const mesh = hit?.hitObject ?? null;
-  if (!collision || !mesh || hit?.hitTarget !== "hand") {
-    surface.visible = false;
-    runoff.visible = false;
-    activeRows = 0;
-    lastMesh = null;
-    lastRevision = -1;
-    return false;
-  }
+const bubblePool: FoamBubble[] = Array.from({ length: bubbleCount }, () => ({
+  position: new THREE.Vector3(),
+  velocity: new THREE.Vector3(),
+  age: 0,
+  lifetime: 2.5,
+  size: 0.7,
+}));
+const waveInterval = Math.max(1 / 60, Math.min(1 / 30, runtime.config.foamUpdateInterval));
+const deterministic = (index: number, offset: number): number =>
+  (index * 0.61803398875 + offset) % 1;
 
-  const revision = collision.handSurfaceRevision;
-  const changed = mesh !== lastMesh ||
-    hit.point.distanceToSquared(lastContact) > 0.000025 ||
-    revision !== lastRevision;
-  if (changed) {
-    lastMesh = mesh;
-    lastRevision = revision;
-    lastContact.copy(hit.point);
-    activeRows = 0;
-    normal.copy(hit.normal).normalize();
-    tangent.copy(down).addScaledVector(normal, -down.dot(normal));
-    if (tangent.lengthSq() < 0.025) tangent.set(0, 0, 1).addScaledVector(normal, -normal.z);
-    if (tangent.lengthSq() < 0.001) tangent.set(1, 0, 0).addScaledVector(normal, -normal.x);
-    tangent.normalize();
-    previousDirection.copy(tangent);
-    center.copy(hit.point);
-
-    for (let row = 0; row < surfaceRows; row++) {
-      const progress = row / (surfaceRows - 1);
-      if (row > 0) {
-        const previousOffset = ((row - 1) * surfaceColumns + 2) * 3;
-        normal.fromArray(surfaceNormalAttribute.array, previousOffset).normalize();
-        tangent.copy(down).addScaledVector(normal, -down.dot(normal));
-        if (tangent.lengthSq() < 0.025) tangent.copy(previousDirection);
-        else {
-          tangent.normalize();
-          if (tangent.dot(previousDirection) < 0) tangent.negate();
-          tangent.lerp(previousDirection, 0.35).normalize();
-        }
-        previousDirection.copy(tangent);
-        candidate.fromArray(surfacePositions, previousOffset)
-          .addScaledVector(normal, -0.002)
-          .addScaledVector(tangent, 0.009);
-        sampleOrigin.copy(candidate).addScaledVector(normal, 0.045);
-        sampleDirection.copy(normal).negate();
-        if (!collision.sampleHandSurface(mesh, sampleOrigin, sampleDirection, samplePoint, sampleNormal, 0.09)) break;
-        offset.subVectors(samplePoint, candidate);
-        offset.addScaledVector(normal, -offset.dot(normal));
-        if (offset.lengthSq() > 0.00015) break;
-        center.copy(samplePoint);
-        normal.copy(sampleNormal).normalize();
-      }
-
-      side.crossVectors(tangent, normal).normalize();
-      if (side.lengthSq() < 0.01) break;
-      let halfWidth = THREE.MathUtils.lerp(surfaceHalfWidth, runoffRadius, progress);
-      let rowSampled = false;
-      for (let attempt = 0; attempt < 4 && !rowSampled; attempt++) {
-        rowSampled = true;
-        for (let column = 0; column < surfaceColumns; column++) {
-          const across = (column / (surfaceColumns - 1) - 0.5) * 2;
-          candidate.copy(center).addScaledVector(side, across * halfWidth);
-          if (column === 2) {
-            samplePoint.copy(center);
-            sampleNormal.copy(normal);
-          } else {
-            sampleOrigin.copy(candidate).addScaledVector(normal, 0.045);
-            offset.copy(normal).negate();
-            if (!collision.sampleHandSurface(mesh, sampleOrigin, offset, samplePoint, sampleNormal, 0.09)) {
-              rowSampled = false;
-              break;
-            }
-            offset.subVectors(samplePoint, candidate);
-            offset.addScaledVector(normal, -offset.dot(normal));
-            if (offset.lengthSq() > 0.0001) {
-              rowSampled = false;
-              break;
-            }
-          }
-          const vertex = row * surfaceColumns + column;
-          const vertexOffset = vertex * 3;
-          surfacePositions[vertexOffset] = samplePoint.x + sampleNormal.x * 0.002;
-          surfacePositions[vertexOffset + 1] = samplePoint.y + sampleNormal.y * 0.002;
-          surfacePositions[vertexOffset + 2] = samplePoint.z + sampleNormal.z * 0.002;
-          surfaceNormalAttribute.setXYZ(vertex, sampleNormal.x, sampleNormal.y, sampleNormal.z);
-        }
-        if (!rowSampled) halfWidth *= 0.68;
-      }
-      if (!rowSampled) break;
-      activeRows = row + 1;
-      if (row > 0) {
-        const along = progress;
-        for (let column = 0; column < surfaceColumns; column++) {
-          surfaceUvs[(row * surfaceColumns + column) * 2 + 1] = along;
-        }
-      }
-    }
-
-    surfacePositionAttribute.needsUpdate = true;
-    surfaceNormalAttribute.needsUpdate = true;
-    surfaceUvAttribute.needsUpdate = true;
-    surfaceGeometry.setDrawRange(0, Math.max(0, activeRows - 1) * (surfaceColumns - 1) * 6);
-    surfaceGeometry.computeBoundingSphere();
-  }
-
-  surface.visible = activeRows > 1;
-  if (!surface.visible) {
-    runoff.visible = false;
-    return false;
-  }
-
-  const lastCenterOffset = ((activeRows - 1) * surfaceColumns + 2) * 3;
-  frame.handExit.fromArray(surfacePositions, lastCenterOffset);
-  frame.handFlowDirection.copy(previousDirection);
-  landing.copy(frame.handExit);
-  const hasUnderBasinSurface = collision.sampleBasinSurface(
-    frame.handExit.x,
-    frame.handExit.z,
-    basinSample,
-    basinNormal,
+function respawnBubble(bubble: FoamBubble, index: number, initial = false): void {
+  const random = (offset: number): number => initial
+    ? deterministic(index, offset)
+    : Math.random();
+  const footprintX = foamFootprint.x || anchorSize.x;
+  const footprintY = foamFootprint.y || anchorSize.y;
+  const footprintZ = foamFootprint.z || anchorSize.z;
+  const angle = random(0.17) * Math.PI * 2;
+  const radius = 0.22 + random(0.43) * 0.5;
+  bubble.position.set(
+    foamCenter.x + Math.cos(angle) * footprintX * radius * 0.5,
+    foamCenter.y + (random(0.71) - 0.46) * footprintY * 0.4,
+    foamCenter.z + Math.sin(angle) * footprintZ * radius * 0.5,
   );
-  const basinY = hasUnderBasinSurface ? basinSample.y : collision.drainCenter.y;
-  const drop = Math.max(0.015, frame.handExit.y - basinY);
-  const flight = Math.sqrt((2 * drop) / gravity);
-  const horizontalDistance = surfaceSpeed * flight;
-  let hasLanding = false;
-  for (let attempt = 0; attempt <= 5; attempt++) {
-    const travel = horizontalDistance * (1 - attempt * 0.2);
-    landing.set(
-      frame.handExit.x + frame.handFlowDirection.x * travel,
-      frame.handExit.y,
-      frame.handExit.z + frame.handFlowDirection.z * travel,
-    );
-    if (collision.sampleBasinSurface(landing.x, landing.z, basinSample, basinNormal)) {
-      landing.copy(basinSample).addScaledVector(basinNormal, 0.002);
-      hasLanding = true;
-      break;
-    }
-  }
-  frame.handLanding.copy(hasLanding ? landing : frame.handExit);
-  hasRunoffPath = hasLanding && landing.y < frame.handExit.y - 0.008;
-  if (hasRunoffPath && (
-    frame.handExit.distanceToSquared(lastRunoffStart) > 0.000001 ||
-    landing.distanceToSquared(lastRunoffEnd) > 0.000001 ||
-    frame.handFlowDirection.distanceToSquared(lastRunoffDirection) > 0.0004
-  )) {
-    updateRunoffGeometry(frame.handExit, landing, frame.handFlowDirection);
-    lastRunoffStart.copy(frame.handExit);
-    lastRunoffEnd.copy(landing);
-    lastRunoffDirection.copy(frame.handFlowDirection);
-  }
-  runoff.visible = hasRunoffPath;
-  return true;
+  bubble.velocity.set(
+    Math.cos(angle) * footprintX * (0.1 + random(0.31) * 0.16),
+    footprintY * (0.1 + random(0.57) * 0.12),
+    Math.sin(angle) * footprintZ * (0.1 + random(0.83) * 0.16),
+  );
+  bubble.age = initial ? random(0.29) * 0.55 : 0;
+  bubble.lifetime = 1.8 + random(0.91) * 1.3;
+  bubble.size = 0.85 + random(0.63) * 0.65;
 }
 
-function updateRunoffGeometry(start: THREE.Vector3, end: THREE.Vector3, direction: THREE.Vector3): void {
-  const drop = Math.max(0.001, start.y - end.y);
-  const launchSpeed = Math.max(0, -direction.y * surfaceSpeed);
-  const flight = (Math.sqrt(launchSpeed * launchSpeed + 2 * gravity * drop) - launchSpeed) / gravity;
-  for (let row = 0; row <= runoffSteps; row++) {
-    const t = row / runoffSteps;
-    const time = flight * t;
-    const centerX = THREE.MathUtils.lerp(start.x, end.x, t);
-    const centerZ = THREE.MathUtils.lerp(start.z, end.z, t);
-    const centerY = start.y - launchSpeed * time - 0.5 * gravity * time * time;
-    tubeTangent.set(end.x - start.x, -launchSpeed * flight - gravity * flight * flight * t, end.z - start.z).normalize();
-    tubeSide.crossVectors(tubeTangent, up);
-    if (tubeSide.lengthSq() < 0.001) tubeSide.set(1, 0, 0);
-    else tubeSide.normalize();
-    tubeUp.crossVectors(tubeSide, tubeTangent).normalize();
-    const radius = THREE.MathUtils.lerp(runoffRadius, 0.0055, t);
-    for (let segment = 0; segment < runoffSides; segment++) {
-      const angle = (segment / runoffSides) * Math.PI * 2;
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      const vertex = row * runoffSides + segment;
-      const at = vertex * 3;
-      const nx = tubeSide.x * cos + tubeUp.x * sin;
-      const ny = tubeSide.y * cos + tubeUp.y * sin;
-      const nz = tubeSide.z * cos + tubeUp.z * sin;
-      runoffPositions[at] = centerX + nx * radius;
-      runoffPositions[at + 1] = centerY + ny * radius;
-      runoffPositions[at + 2] = centerZ + nz * radius;
-      runoffNormalAttribute.setXYZ(vertex, nx, ny, nz);
-    }
+for (let index = 0; index < bubblePool.length; index++) {
+  const bubble = bubblePool[index]!;
+  respawnBubble(bubble, index, true);
+  const pinkAmount = 0.02 + ((index * 7) % 9) * 0.025;
+  instanceColor.copy(foamWhiteTint).lerp(foamPinkTint, pinkAmount);
+  bubbles.setColorAt(index, instanceColor);
+}
+if (bubbles.instanceColor) bubbles.instanceColor.needsUpdate = true;
+
+let attachedMesh: THREE.Mesh | null = null;
+let previousMaterial: THREE.Material | THREE.Material[] | null = null;
+let previousVisibility: boolean | null = null;
+let rebuildAccumulator = waveInterval;
+
+function detachAnchor(): void {
+  if (attachedMesh) {
+    if (previousMaterial) attachedMesh.material = previousMaterial;
+    if (previousVisibility !== null) attachedMesh.visible = previousVisibility;
   }
-  runoffPositionAttribute.needsUpdate = true;
-  runoffNormalAttribute.needsUpdate = true;
-  runoffGeometry.computeBoundingSphere();
+  attachedMesh = null;
+  previousMaterial = null;
+  previousVisibility = null;
+}
+
+function measureHandBounds(anchor: THREE.Mesh): boolean {
+  let root: THREE.Object3D = anchor;
+  while (root.parent) root = root.parent;
+
+  handWorldBounds.makeEmpty();
+  for (const name of ["R_Hand", "L_Hand"]) {
+    const hand = root.getObjectByName(name);
+    if (!(hand instanceof THREE.Mesh)) continue;
+
+    hand.updateWorldMatrix(true, false);
+    handBoundsScratch.setFromObject(hand, true);
+    handWorldBounds.union(handBoundsScratch);
+  }
+
+  if (handWorldBounds.isEmpty()) return false;
+
+  anchorWorldInverse.copy(anchor.matrixWorld).invert();
+  handLocalBounds.copy(handWorldBounds).applyMatrix4(anchorWorldInverse);
+  return !handLocalBounds.isEmpty();
+}
+
+function configureForAnchor(anchor: THREE.Mesh): void {
+  anchor.geometry.computeBoundingBox();
+  const bounds = anchor.geometry.boundingBox;
+  if (!bounds) return;
+
+  bounds.getSize(anchorSize);
+  bounds.getCenter(anchorCenter);
+  anchor.updateWorldMatrix(true, false);
+
+  // The GLB anchor is a small placement marker. Fit the foam around the actual
+  // hand meshes so the palms and fingers sit inside the cloud instead of sizing
+  // it only from that marker cube.
+  if (measureHandBounds(anchor)) {
+    handLocalBounds.getSize(targetFoamSize);
+    handLocalBounds.getCenter(foamCenter);
+  } else {
+    targetFoamSize.copy(anchorSize);
+    foamCenter.copy(anchorCenter);
+  }
+  targetFoamSize.multiplyScalar(runtime.config.foamHandCoverageMultiplier);
+  foamCenter.y += targetFoamSize.y * runtime.config.foamVerticalOffsetFraction;
+  foamFootprint.copy(targetFoamSize);
+
+  // Reposition the bubble pool if the GLB anchor is replaced or reloaded.
+  for (let index = 0; index < bubblePool.length; index++) {
+    respawnBubble(bubblePool[index]!, index, true);
+  }
+}
+
+function updateFoamPuffs(time: number): void {
+  const footprintX = Math.max(foamFootprint.x, 0.001);
+  const footprintY = Math.max(foamFootprint.y, 0.001);
+  const footprintZ = Math.max(foamFootprint.z, 0.001);
+  for (let index = 0; index < foamPuffPool.length; index++) {
+    const puff = foamPuffPool[index]!;
+    const drift = Math.sin(time * 0.72 + puff.phase) * 0.012;
+    const bob = Math.cos(time * 0.61 + puff.phase * 1.3) * 0.009;
+    const pulse = 1 + Math.sin(time * 0.82 + puff.phase * 1.7) * 0.035;
+    scratchPosition.set(
+      foamCenter.x + puff.position.x * footprintX * 0.5 + drift * footprintX,
+      foamCenter.y + puff.position.y * footprintY * 0.5 + bob * footprintY,
+      foamCenter.z + puff.position.z * footprintZ * 0.5 + drift * footprintZ * 0.55,
+    );
+    const radius = Math.min(footprintX, footprintY, footprintZ) * puff.size * pulse;
+    scratchScale.setScalar(radius);
+    instanceMatrix.compose(scratchPosition, identity, scratchScale);
+    foamPuffs.setMatrixAt(index, instanceMatrix);
+  }
+  foamPuffs.instanceMatrix.needsUpdate = true;
+}
+
+function updateBubbles(delta: number): void {
+  for (let index = 0; index < bubblePool.length; index++) {
+    const bubble = bubblePool[index]!;
+    bubble.age += delta;
+    bubble.position.addScaledVector(bubble.velocity, delta);
+    bubble.velocity.x += Math.sin(bubble.age * 2.1 + index) * delta * 0.1;
+    bubble.velocity.z += Math.cos(bubble.age * 1.8 + index * 0.7) * delta * 0.08;
+    if (
+      bubble.age >= bubble.lifetime ||
+      bubble.position.y > foamCenter.y + foamFootprint.y * 0.5 + anchorSize.y * 0.3 ||
+      bubble.position.x < foamCenter.x - foamFootprint.x * 0.6 ||
+      bubble.position.x > foamCenter.x + foamFootprint.x * 0.6 ||
+      bubble.position.z < foamCenter.z - foamFootprint.z * 0.6 ||
+      bubble.position.z > foamCenter.z + foamFootprint.z * 0.6
+    ) {
+      respawnBubble(bubble, index);
+    }
+
+    const lifetime = THREE.MathUtils.clamp(bubble.age / bubble.lifetime, 0, 1);
+    const fade = 1 - THREE.MathUtils.smoothstep(lifetime, 0.72, 1);
+    const birth = THREE.MathUtils.smoothstep(bubble.age, 0, 0.22);
+    const pulse = 0.92 + Math.sin(bubble.age * 2.3 + index * 1.7) * 0.08;
+    scratchPosition.copy(bubble.position);
+    scratchScale.setScalar(bubble.size * pulse * (0.2 + birth * 0.8) * fade);
+    instanceMatrix.compose(scratchPosition, identity, scratchScale);
+    bubbles.setMatrixAt(index, instanceMatrix);
+  }
+  bubbles.instanceMatrix.needsUpdate = true;
 }
 
 const effect: WaterEffect = {
   order: 1,
   object,
   update(frame) {
-    object.visible = frame.ready && frame.active;
-    frame.hasHandFlow = false;
-    if (!object.visible || !buildHandPath(frame)) return;
-    frame.hasHandFlow = true;
-    updateWaterMaterialTime(material, frame.time);
+    const nextMesh = frame.handFoamSurface;
+    if (nextMesh !== attachedMesh) {
+      detachAnchor();
+      if (nextMesh) {
+        attachedMesh = nextMesh;
+        previousMaterial = nextMesh.material;
+        previousVisibility = nextMesh.visible;
+        configureForAnchor(nextMesh);
+        nextMesh.visible = false;
+      }
+    }
+
+    object.visible = Boolean(frame.ready && frame.active && attachedMesh);
+    if (!object.visible || !attachedMesh) return;
+
+    attachedMesh.updateWorldMatrix(true, false);
+    object.matrix.copy(attachedMesh.matrixWorld);
+    object.matrixWorldNeedsUpdate = true;
+    updateWaterMaterial(foamMaterial, frame.time);
+    updateWaterMaterial(bubbleMaterial, frame.time);
+    rebuildAccumulator += frame.delta;
+    if (rebuildAccumulator >= waveInterval) {
+      rebuildAccumulator %= waveInterval;
+      updateFoamPuffs(frame.time);
+    }
+    updateBubbles(frame.delta);
   },
   dispose() {
-    surfaceGeometry.dispose();
-    runoffGeometry.dispose();
-    material.dispose();
+    detachAnchor();
+    foamPuffGeometry.dispose();
+    bubbleGeometry.dispose();
+    disposeWaterMaterial(bubbleMaterial);
+    disposeWaterMaterial(foamMaterial);
   },
 };
 

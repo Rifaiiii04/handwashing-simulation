@@ -2,30 +2,47 @@ import * as THREE from "three";
 
 export interface WaterSystemConfig {
   color: THREE.ColorRepresentation;
-  deepColor?: THREE.ColorRepresentation;
-  opacity: number;
-  radiusTop?: number;
-  radiusBottom?: number;
-  flowSpeed?: number;
-  maxSplashParticles?: number;
-  particleCount?: number;
-  gravity?: number;
-  particleLifetime?: number;
-  particleSize?: number;
+  deepColor: THREE.ColorRepresentation;
+  foamColor: THREE.ColorRepresentation;
+  streamRadius: number;
+  particleCount: number;
+  particleRate: number;
+  particleLifetime: number;
+  particleSize: number;
+  particleGravity: number;
+  foamPuffCount: number;
+  foamBubbleCount: number;
+  foamUpdateInterval: number;
+  foamOpacity: number;
+  foamHandCoverageMultiplier: number;
+  foamVerticalOffsetFraction: number;
+  surfaceWaveWorldAmplitude: number;
+  surfaceImpactRadiusFraction: number;
 }
-
-/** Legacy name retained for callers that previously configured particles only. */
-export type WaterParticleConfig = WaterSystemConfig;
 
 export const DEFAULT_WATER_CONFIG: WaterSystemConfig = {
   color: 0x168dff,
-  deepColor: 0x003d99,
-  opacity: 0.94,
-  radiusTop: 0.054,
-  radiusBottom: 0.042,
-  flowSpeed: 4.8,
-  maxSplashParticles: 220,
-  gravity: 9.81,
-  particleLifetime: 0.8,
-  particleSize: 0.022,
+  deepColor: 0x0752ad,
+  foamColor: 0xffdce8,
+  streamRadius: 0.053,
+  particleCount: 40,
+  particleRate: 28,
+  particleLifetime: 0.48,
+  particleSize: 0.032,
+  particleGravity: 3.2,
+  foamPuffCount: 78,
+  foamBubbleCount: 118,
+  foamUpdateInterval: 1 / 12,
+  // Each overlapping puff stays translucent; the dense cluster keeps its silhouette.
+  foamOpacity: 0.1,
+  // Expand well beyond both GLB hand bounds so the palms and fingers sit inside.
+  foamHandCoverageMultiplier: 1.55,
+  // Raise the foam slightly above the center of the hand bounds.
+  foamVerticalOffsetFraction: 0.08,
+  // Displacement is converted to the mesh's local Y scale at runtime.
+  surfaceWaveWorldAmplitude: 0.018,
+  surfaceImpactRadiusFraction: 0.105,
 };
+
+/** Legacy name retained for callers that configure the droplet pool. */
+export type WaterParticleConfig = WaterSystemConfig;

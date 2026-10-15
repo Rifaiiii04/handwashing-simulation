@@ -1,6 +1,5 @@
 import type { InjectionKey } from "vue";
 import * as THREE from "three";
-import type { StreamHit, WaterCollisionSystem } from "~/composables/useWaterCollision";
 import type { WaterSystemConfig } from "./waterConfig";
 
 export interface WaterFrameState {
@@ -9,21 +8,19 @@ export interface WaterFrameState {
   delta: number;
   time: number;
   origin: THREE.Vector3;
-  hit: StreamHit | null;
-  collision: WaterCollisionSystem | null;
-  handExit: THREE.Vector3;
-  handLanding: THREE.Vector3;
-  handFlowDirection: THREE.Vector3;
-  hasHandFlow: boolean;
-  basinImpact: THREE.Vector3;
-  drainEntry: THREE.Vector3;
-  drainEntryRadius: number;
-  hasDrainEntry: boolean;
+  streamDirection: THREE.Vector3;
+  streamEnd: THREE.Vector3;
+  handFoamSurface: THREE.Mesh | null;
+  sinkWaterSurface: THREE.Mesh | null;
+  splashOrigin: THREE.Vector3;
+  splashActive: boolean;
+  drainLocalPosition: THREE.Vector3;
+  drainLocalRadius: number;
 }
 
 export interface WaterEffect {
   readonly order: number;
-  readonly object: THREE.Object3D;
+  readonly object?: THREE.Object3D;
   update(frame: WaterFrameState): void;
   dispose(): void;
 }
