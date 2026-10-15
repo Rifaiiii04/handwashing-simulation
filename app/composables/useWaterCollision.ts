@@ -6,6 +6,7 @@ export interface StreamHit {
   point: THREE.Vector3;
   normal: THREE.Vector3;
   hitTarget?: "hand" | "sink";
+  hitObject?: THREE.Mesh;
   runoffPoint?: THREE.Vector3;
   runoffNormal?: THREE.Vector3;
   basinPoint: THREE.Vector3;
@@ -15,6 +16,8 @@ export interface StreamHit {
 export interface WaterCollisionSystem {
   /** Refresh target matrices and world-space bounds (call once per frame) */
   refreshTargets: () => void;
+  /** Increments when a hand transform or skinned pose changes. */
+  readonly handSurfaceRevision: number;
   /** Fast proximity check against hand bounds */
   checkPoint: (point: THREE.Vector3) => boolean;
   /** Downward raycast to find hand surface or basin surface */
@@ -30,8 +33,26 @@ export interface WaterCollisionSystem {
   drainCenter: THREE.Vector3;
   /** Drain opening absorption radius */
   drainRadius: number;
+  /** Lower open edge of the drain passage in the GLB. */
+  drainExitY: number | null;
   /** Height of sink basin at world coordinate (x, z) */
   getBasinHeightAt: (x: number, z: number) => number;
+  /** Sample the actual sink mesh at an XZ point when the basin is covered. */
+  sampleBasinSurface: (
+    x: number,
+    z: number,
+    target: THREE.Vector3,
+    normalTarget?: THREE.Vector3,
+  ) => boolean;
+  /** Sample a specific hand mesh along a world-space ray (SkinnedMesh-aware). */
+  sampleHandSurface: (
+    mesh: THREE.Mesh,
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    target: THREE.Vector3,
+    normalTarget: THREE.Vector3,
+    maxDistance?: number,
+  ) => boolean;
 }
 
 interface CachedHandTarget {
@@ -39,6 +60,8 @@ interface CachedHandTarget {
   worldCenter: THREE.Vector3;
   radius: number;
   radiusSq: number;
+  boneMatrixSnapshot: Float32Array | null;
+  worldMatrixSnapshot: Float32Array;
 }
 
 /**
@@ -54,12 +77,16 @@ export function createWaterCollision(
 ): WaterCollisionSystem {
   const cachedHands: CachedHandTarget[] = [];
   const handMeshes: THREE.Mesh[] = [];
+  let handSurfaceRevision = 0;
   let sinkMesh: THREE.Mesh | null = null;
 
   // Fallback values are replaced from the sink mesh's interior floor at startup.
   const drainCenter = new THREE.Vector3(0, 0.7282, -0.25);
   let drainRadius = 0.14;
   let basinFloorY = 0.7282;
+  let drainExitY: number | null = null;
+  let sinkRayTop = 3;
+  let sinkRayFar = 4;
 
   // 1. Discover Hand Meshes
   for (const name of handTargetNames) {
@@ -73,11 +100,21 @@ export function createWaterCollision(
         if (!child.geometry.boundingSphere) {
           child.geometry.computeBoundingSphere();
         }
+        const skinnedMesh = child as THREE.SkinnedMesh;
+        let boneMatrixSnapshot: Float32Array | null = null;
+        if (skinnedMesh.isSkinnedMesh && skinnedMesh.skeleton) {
+          // Seed the bound after the model's world matrices were resolved.
+          skinnedMesh.skeleton.update();
+          skinnedMesh.computeBoundingSphere();
+          boneMatrixSnapshot = skinnedMesh.skeleton.boneMatrices.slice();
+        }
         cachedHands.push({
           mesh: child,
           worldCenter: new THREE.Vector3(),
           radius: 0.15,
           radiusSq: 0.0225,
+          boneMatrixSnapshot,
+          worldMatrixSnapshot: new Float32Array(child.matrixWorld.elements),
         });
         handMeshes.push(child);
       }
@@ -95,50 +132,146 @@ export function createWaterCollision(
   });
 
   if (sinkMesh) {
-    const posAttr = (sinkMesh as THREE.Mesh).geometry.getAttribute("position");
+    const sinkGeometry = sinkMesh.geometry;
+    const posAttr = sinkGeometry.getAttribute("position");
     if (posAttr instanceof THREE.BufferAttribute) {
       const v = new THREE.Vector3();
       let minBasinY = Infinity;
+      let minSinkY = Infinity;
+      let maxSinkY = -Infinity;
       for (let i = 0; i < posAttr.count; i++) {
         v.fromBufferAttribute(posAttr, i);
         v.applyMatrix4((sinkMesh as THREE.Mesh).matrixWorld);
+        minSinkY = Math.min(minSinkY, v.y);
+        maxSinkY = Math.max(maxSinkY, v.y);
         if (v.y > 0.5 && v.y < minBasinY) {
           minBasinY = v.y;
         }
       }
+      if (minSinkY !== Infinity && maxSinkY !== -Infinity) {
+        sinkRayTop = maxSinkY + 0.1;
+        sinkRayFar = sinkRayTop - minSinkY + 0.2;
+      }
       if (minBasinY !== Infinity) {
         basinFloorY = minBasinY;
+      }
 
-        // The GLB's lowest interior ring is the drain boundary. Its centroid
-        // gives the actual opening center instead of relying on a scene guess.
-        let floorVertexCount = 0;
-        let sumX = 0;
-        let sumZ = 0;
-        let maxRadiusSq = 0;
-        for (let i = 0; i < posAttr.count; i++) {
-          v.fromBufferAttribute(posAttr, i);
-          v.applyMatrix4((sinkMesh as THREE.Mesh).matrixWorld);
-          if (Math.abs(v.y - basinFloorY) > 0.002) continue;
-          floorVertexCount += 1;
-          sumX += v.x;
-          sumZ += v.z;
+      // Recover connected open boundary loops by position, not by height bands.
+      // The GLB can split vertices at UV/normal seams, so index-only edge keys
+      // can turn one opening into many false fragments.
+      const edgeUse = new Map<string, { count: number; a: string; b: string }>();
+      const index = sinkGeometry.index;
+      const triangleIndexCount = index?.count ?? posAttr.count;
+      const vertexKeys = new Array<string>(posAttr.count);
+      const boundaryPoints = new Map<string, { x: number; y: number; z: number }>();
+      for (let i = 0; i < posAttr.count; i++) {
+        const x = posAttr.getX(i);
+        const y = posAttr.getY(i);
+        const z = posAttr.getZ(i);
+        const key = `${Math.round(x * 10000)}:${Math.round(y * 10000)}:${Math.round(z * 10000)}`;
+        vertexKeys[i] = key;
+        if (!boundaryPoints.has(key)) boundaryPoints.set(key, { x, y, z });
+      }
+
+      for (let i = 0; i + 2 < triangleIndexCount; i += 3) {
+        const a = vertexKeys[index ? index.getX(i) : i];
+        const b = vertexKeys[index ? index.getX(i + 1) : i + 1];
+        const c = vertexKeys[index ? index.getX(i + 2) : i + 2];
+        if (!a || !b || !c) continue;
+        for (const [from, to] of [[a, b], [b, c], [c, a]]) {
+          const key = from < to ? `${from}|${to}` : `${to}|${from}`;
+          const edge = edgeUse.get(key);
+          if (edge) edge.count += 1;
+          else edgeUse.set(key, { count: 1, a: from, b: to });
         }
+      }
 
-        if (floorVertexCount > 0) {
-          drainCenter.set(sumX / floorVertexCount, basinFloorY, sumZ / floorVertexCount);
-          for (let i = 0; i < posAttr.count; i++) {
-            v.fromBufferAttribute(posAttr, i);
-            v.applyMatrix4((sinkMesh as THREE.Mesh).matrixWorld);
-            if (Math.abs(v.y - basinFloorY) > 0.002) continue;
-            const dx = v.x - drainCenter.x;
-            const dz = v.z - drainCenter.z;
-            maxRadiusSq = Math.max(maxRadiusSq, dx * dx + dz * dz);
+      const boundaryAdjacency = new Map<string, Set<string>>();
+      for (const edge of edgeUse.values()) {
+        if (edge.count !== 1) continue;
+        let aNeighbors = boundaryAdjacency.get(edge.a);
+        if (!aNeighbors) boundaryAdjacency.set(edge.a, (aNeighbors = new Set<string>()));
+        let bNeighbors = boundaryAdjacency.get(edge.b);
+        if (!bNeighbors) boundaryAdjacency.set(edge.b, (bNeighbors = new Set<string>()));
+        aNeighbors.add(edge.b);
+        bNeighbors.add(edge.a);
+      }
+
+      const loops: Array<{ y: number; x: number; z: number; radius: number }> = [];
+      const visitedBoundary = new Set<string>();
+      for (const start of boundaryAdjacency.keys()) {
+        if (visitedBoundary.has(start)) continue;
+        const component: string[] = [];
+        const stack = [start];
+        visitedBoundary.add(start);
+        while (stack.length > 0) {
+          const current = stack.pop();
+          if (!current) continue;
+          component.push(current);
+          const neighbors = boundaryAdjacency.get(current);
+          if (!neighbors) continue;
+          for (const neighbor of neighbors) {
+            if (visitedBoundary.has(neighbor)) continue;
+            visitedBoundary.add(neighbor);
+            stack.push(neighbor);
           }
-          // Stay inside the GLB's drain rim so particles disappear at the opening.
-          drainRadius = Math.max(0.06, Math.sqrt(maxRadiusSq) * 0.9);
-        } else {
-          drainCenter.y = basinFloorY;
         }
+        if (component.length < 8) continue;
+
+        let sumX = 0;
+        let sumY = 0;
+        let sumZ = 0;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const key of component) {
+          const point = boundaryPoints.get(key);
+          if (!point) continue;
+          v.set(point.x, point.y, point.z).applyMatrix4((sinkMesh as THREE.Mesh).matrixWorld);
+          sumX += v.x;
+          sumY += v.y;
+          sumZ += v.z;
+          minY = Math.min(minY, v.y);
+          maxY = Math.max(maxY, v.y);
+        }
+        if (maxY - minY > 0.035) continue;
+
+        const x = sumX / component.length;
+        const y = sumY / component.length;
+        const z = sumZ / component.length;
+        let maxRadiusSq = 0;
+        for (const key of component) {
+          const point = boundaryPoints.get(key);
+          if (!point) continue;
+          v.set(point.x, point.y, point.z).applyMatrix4((sinkMesh as THREE.Mesh).matrixWorld);
+          const dx = v.x - x;
+          const dz = v.z - z;
+          maxRadiusSq = Math.max(maxRadiusSq, dx * dx + dz * dz);
+        }
+        const radius = Math.sqrt(maxRadiusSq);
+        if (radius >= 0.04) loops.push({ y, x, z, radius });
+      }
+
+      let upperDrainLoop: (typeof loops)[number] | null = null;
+      let lowerOpening: (typeof loops)[number] | null = null;
+      for (const upper of loops) {
+        if (upper.radius < 0.04) continue;
+        for (const lower of loops) {
+          if (lower.radius < 0.04 || lower.y >= upper.y - 0.1) continue;
+          const centerDistance = Math.hypot(upper.x - lower.x, upper.z - lower.z);
+          const radiusRatio = lower.radius / upper.radius;
+          if (centerDistance >= 0.03 || radiusRatio <= 0.5 || radiusRatio >= 1.5) continue;
+          if (!upperDrainLoop || upper.y < upperDrainLoop.y) {
+            upperDrainLoop = upper;
+            lowerOpening = lower;
+          }
+        }
+      }
+
+      if (upperDrainLoop && lowerOpening) {
+        basinFloorY = upperDrainLoop.y;
+        drainCenter.set(upperDrainLoop.x, upperDrainLoop.y, upperDrainLoop.z);
+        drainRadius = upperDrainLoop.radius;
+        drainExitY = lowerOpening.y - 0.025;
       }
     }
   }
@@ -178,13 +311,76 @@ export function createWaterCollision(
     return baseY;
   }
 
+  function sampleBasinSurface(
+    x: number,
+    z: number,
+    target: THREE.Vector3,
+    normalTarget?: THREE.Vector3,
+  ): boolean {
+    if (sinkMesh) {
+      _raycaster.set(_basinRayOrigin.set(x, sinkRayTop, z), _rayDown);
+      _raycaster.near = 0.001;
+      _raycaster.far = sinkRayFar;
+      _sinkHits.length = 0;
+      _raycaster.intersectObject(sinkMesh, false, _sinkHits);
+      for (let i = 0; i < _sinkHits.length; i++) {
+        const hit = _sinkHits[i];
+        if (hit && hit.point.y >= drainCenter.y - 0.01) {
+          target.copy(hit.point);
+          if (normalTarget && hit.face?.normal) {
+            _hitNormalMatrix.getNormalMatrix(sinkMesh.matrixWorld);
+            normalTarget.copy(hit.face.normal).applyMatrix3(_hitNormalMatrix).normalize();
+          } else if (normalTarget) {
+            normalTarget.set(0, 1, 0);
+          }
+          return true;
+        }
+      }
+    }
+    target.set(x, getBasinHeightAt(x, z), z);
+    normalTarget?.set(0, 1, 0);
+    return false;
+  }
+
+  function sampleHandSurface(
+    mesh: THREE.Mesh,
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    target: THREE.Vector3,
+    normalTarget: THREE.Vector3,
+    maxDistance = 0.08,
+  ): boolean {
+    _raycaster.set(origin, direction);
+    _raycaster.near = 0.001;
+    _raycaster.far = maxDistance;
+    _handSampleHits.length = 0;
+    _raycaster.intersectObject(mesh, false, _handSampleHits);
+    const hit = _handSampleHits[0];
+    if (!hit) return false;
+
+    target.copy(hit.point);
+    if (hit.face?.normal) {
+      _hitNormalMatrix.getNormalMatrix(mesh.matrixWorld);
+      normalTarget.copy(hit.face.normal).applyMatrix3(_hitNormalMatrix).normalize();
+    } else if (hit.normal) {
+      _hitNormalMatrix.getNormalMatrix(mesh.matrixWorld);
+      normalTarget.copy(hit.normal).applyMatrix3(_hitNormalMatrix).normalize();
+    } else {
+      normalTarget.set(0, 1, 0);
+    }
+    if (normalTarget.dot(direction) > 0) normalTarget.negate();
+    return true;
+  }
+
   // Pre-allocated temporaries for 0 runtime garbage collection
   const _tmpSphere = new THREE.Sphere();
   const _raycaster = new THREE.Raycaster();
   const _rayDown = new THREE.Vector3(0, -1, 0);
+  const _basinRayOrigin = new THREE.Vector3();
   const _hitNormalMatrix = new THREE.Matrix3();
   const _diff = new THREE.Vector3();
   const _handHits: THREE.Intersection[] = [];
+  const _handSampleHits: THREE.Intersection[] = [];
   const _sinkHits: THREE.Intersection[] = [];
   const _collisionResult = { collided: false, stopped: false };
 
@@ -194,7 +390,7 @@ export function createWaterCollision(
     point: new THREE.Vector3(0, basinFloorY, -0.668),
     normal: new THREE.Vector3(0, 1, 0),
     hitTarget: undefined,
-    runoffPoint: new THREE.Vector3(-0.012, 1.435, -0.440),
+    runoffPoint: new THREE.Vector3(),
     runoffNormal: new THREE.Vector3(0, -1, 0),
     basinPoint: new THREE.Vector3(0, 0.822, -0.668),
     basinNormal: new THREE.Vector3(0, 0.828, 0.561),
@@ -202,11 +398,54 @@ export function createWaterCollision(
 
   function refreshTargets(): void {
     for (const t of cachedHands) {
-      const geo = t.mesh.geometry;
-      if (!geo.boundingSphere) geo.computeBoundingSphere();
-      if (!geo.boundingSphere) continue;
+      t.mesh.updateWorldMatrix(true, false);
+      const worldElements = t.mesh.matrixWorld.elements;
+      let surfaceChanged = false;
+      for (let i = 0; i < worldElements.length; i++) {
+        if (Math.abs(worldElements[i]! - t.worldMatrixSnapshot[i]!) > 0.000001) {
+          surfaceChanged = true;
+          break;
+        }
+      }
 
-      _tmpSphere.copy(geo.boundingSphere);
+      const geo = t.mesh.geometry;
+      if ((t.mesh as THREE.SkinnedMesh).isSkinnedMesh) {
+        const skinnedMesh = t.mesh as THREE.SkinnedMesh;
+        const skeleton = skinnedMesh.skeleton;
+        if (skeleton) {
+          for (const bone of skeleton.bones) bone.updateWorldMatrix(true, false);
+          skeleton.update();
+          const boneMatrices = skeleton.boneMatrices;
+          let poseChanged = !t.boneMatrixSnapshot ||
+            t.boneMatrixSnapshot.length !== boneMatrices.length;
+          if (!poseChanged && t.boneMatrixSnapshot) {
+            for (let i = 0; i < boneMatrices.length; i++) {
+              if (Math.abs(boneMatrices[i]! - t.boneMatrixSnapshot[i]!) > 0.000001) {
+                poseChanged = true;
+                break;
+              }
+            }
+          }
+          if (poseChanged) {
+            surfaceChanged = true;
+            skinnedMesh.computeBoundingSphere();
+            if (!t.boneMatrixSnapshot || t.boneMatrixSnapshot.length !== boneMatrices.length) {
+              t.boneMatrixSnapshot = new Float32Array(boneMatrices.length);
+            }
+            t.boneMatrixSnapshot.set(boneMatrices);
+          }
+        }
+        if (!skinnedMesh.boundingSphere) continue;
+        _tmpSphere.copy(skinnedMesh.boundingSphere);
+      } else {
+        if (!geo.boundingSphere) geo.computeBoundingSphere();
+        if (!geo.boundingSphere) continue;
+        _tmpSphere.copy(geo.boundingSphere);
+      }
+      if (surfaceChanged) {
+        t.worldMatrixSnapshot.set(worldElements);
+        handSurfaceRevision++;
+      }
       _tmpSphere.applyMatrix4(t.mesh.matrixWorld);
 
       t.worldCenter.copy(_tmpSphere.center);
@@ -234,6 +473,7 @@ export function createWaterCollision(
 
     _streamHit.hit = false;
     _streamHit.hitTarget = undefined;
+    _streamHit.hitObject = undefined;
 
     // Default basin impact point directly under stream
     const defaultBasinY = getBasinHeightAt(origin.x, origin.z);
@@ -270,43 +510,49 @@ export function createWaterCollision(
       _handHits.length = 0;
       _raycaster.intersectObjects(handMeshes, false, _handHits);
       const topHit = _handHits[0];
-      const bottomHit = _handHits.length > 1 ? _handHits[_handHits.length - 1] : topHit;
+      let bottomHit = topHit;
+      if (topHit) {
+        for (let i = _handHits.length - 1; i > 0; i--) {
+          const candidate = _handHits[i];
+          if (candidate?.object === topHit.object) {
+            bottomHit = candidate;
+            break;
+          }
+        }
+      }
 
       if (topHit) {
         _streamHit.hit = true;
         _streamHit.distance = topHit.distance;
         _streamHit.point.copy(topHit.point);
         _streamHit.hitTarget = "hand";
+        _streamHit.hitObject = topHit.object as THREE.Mesh;
 
         if (topHit.face && topHit.face.normal) {
           _hitNormalMatrix.getNormalMatrix(topHit.object.matrixWorld);
           _streamHit.normal.copy(topHit.face.normal).applyMatrix3(_hitNormalMatrix).normalize();
         } else if (topHit.normal) {
-          _streamHit.normal.copy(topHit.normal);
+          _hitNormalMatrix.getNormalMatrix(topHit.object.matrixWorld);
+          _streamHit.normal.copy(topHit.normal).applyMatrix3(_hitNormalMatrix).normalize();
         } else {
           _streamHit.normal.set(0, 1, 0);
         }
+        if (_streamHit.normal.dot(_rayDown) > 0) _streamHit.normal.negate();
 
-        // Runoff exit: use the bottom hit point if the ray exits the hands,
-        // otherwise estimate from the top hit shifted toward fingertips.
-        // This makes water flow naturally off the palm surface rather than
-        // teleporting to a hardcoded coordinate.
+        // Keep a real mesh hit as the fallback. The renderer traces the visible
+        // surface flow from the contact point to the edge when possible.
         if (bottomHit && bottomHit !== topHit) {
-          // Ray exits bottom of hands — water drips from there
           _streamHit.runoffPoint!.copy(bottomHit.point);
-          // Shift slightly below hand surface so the waterfall starts cleanly
-          _streamHit.runoffPoint!.y -= 0.008;
+          if (bottomHit.face?.normal) {
+            _hitNormalMatrix.getNormalMatrix(bottomHit.object.matrixWorld);
+            _streamHit.runoffNormal!.copy(bottomHit.face.normal).applyMatrix3(_hitNormalMatrix).normalize();
+          } else {
+            _streamHit.runoffNormal!.copy(_streamHit.normal);
+          }
         } else {
-          // Single hit — estimate runoff from fingertip region
-          // Use the hit point but shift toward the front (positive Z = toward viewer)
-          // and slightly down, matching the cupped hands' lowest edge
-          _streamHit.runoffPoint!.set(
-            topHit.point.x * 0.7 - 0.01,
-            topHit.point.y - 0.04,
-            topHit.point.z + 0.15,
-          );
+          _streamHit.runoffPoint!.copy(topHit.point);
+          _streamHit.runoffNormal!.copy(_streamHit.normal);
         }
-        _streamHit.runoffNormal!.set(0, -1, 0);
 
         return _streamHit;
       }
@@ -424,12 +670,16 @@ export function createWaterCollision(
 
   return {
     refreshTargets,
+    get handSurfaceRevision() { return handSurfaceRevision; },
     checkPoint,
     castStreamRay,
     resolveParticleCollision,
     basinY: basinFloorY,
     drainCenter,
     drainRadius,
+    drainExitY,
     getBasinHeightAt,
+    sampleBasinSurface,
+    sampleHandSurface,
   };
 }

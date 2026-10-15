@@ -1,128 +1,146 @@
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from "vue";
-import { useTres } from "@tresjs/core";
-import { useLoop } from "@tresjs/core";
+import { onUnmounted, provide, ref, watch } from "vue";
+import { useLoop, useTres } from "@tresjs/core";
 import * as THREE from "three";
-import {
-  createWaterParticleSystem,
-  DEFAULT_WATER_CONFIG,
-} from "~/composables/useWaterParticles";
-import type { WaterParticleConfig } from "~/composables/useWaterParticles";
-import { createWaterCollision } from "~/composables/useWaterCollision";
-import type { StreamHit, WaterCollisionSystem } from "~/composables/useWaterCollision";
-
-// Physics updated: volumetric waterfall, continuous basin spread flowing into drain
+import FaucetStream from "./water/FaucetStream.vue";
+import HandWetness from "./water/HandWetness.vue";
+import SinkWaterSurface from "./water/SinkWaterSurface.vue";
+import DrainVortex from "./water/DrainVortex.vue";
+import WaterDroplets from "./water/WaterDroplets.vue";
+import { DEFAULT_WATER_CONFIG, type WaterSystemConfig } from "./water/waterConfig";
+import { WaterRuntimeKey, type WaterEffect, type WaterFrameState, type WaterRuntime } from "./water/waterRuntime";
+import { createWaterCollision, type WaterCollisionSystem } from "~/composables/useWaterCollision";
 
 const props = withDefaults(
   defineProps<{
-    config?: Partial<WaterParticleConfig>;
+    config?: Partial<WaterSystemConfig>;
     active?: boolean;
   }>(),
-  {
-    active: true,
-  },
+  { active: true },
 );
 
-const mergedConfig: WaterParticleConfig = {
-  ...DEFAULT_WATER_CONFIG,
-  ...props.config,
+const config: WaterSystemConfig = { ...DEFAULT_WATER_CONFIG, ...props.config };
+const { scene } = useTres();
+const waterSpawn = ref<THREE.Object3D | null>(null);
+let collisionSystem: WaterCollisionSystem | null = null;
+let loggedSpawnFound = false;
+let loggedSpawnMissing = false;
+let loggedReferencesMissing = false;
+
+const frame: WaterFrameState = {
+  ready: false,
+  active: true,
+  delta: 0,
+  time: 0,
+  origin: new THREE.Vector3(),
+  hit: null,
+  collision: null,
+  handExit: new THREE.Vector3(),
+  handLanding: new THREE.Vector3(),
+  handFlowDirection: new THREE.Vector3(0, -1, 0),
+  hasHandFlow: false,
+  basinImpact: new THREE.Vector3(),
+  drainEntry: new THREE.Vector3(),
+  drainEntryRadius: 0,
+  hasDrainEntry: false,
 };
 
-const { scene } = useTres();
-const waterSystem = createWaterParticleSystem(mergedConfig);
-let collisionSystem: WaterCollisionSystem | null = null;
+const effects: WaterEffect[] = [];
+const runtime: WaterRuntime = {
+  config,
+  frame,
+  register(effect) {
+    effects.push(effect);
+    effects.sort((a, b) => a.order - b.order);
+    if (scene.value && effect.object.parent !== scene.value) scene.value.add(effect.object);
+    return () => {
+      const index = effects.indexOf(effect);
+      if (index !== -1) effects.splice(index, 1);
+      if (effect.object.parent) effect.object.parent.remove(effect.object);
+    };
+  },
+};
+provide(WaterRuntimeKey, runtime);
 
-const spawnPosition = new THREE.Vector3();
-const waterSpawnObject = ref<THREE.Object3D | null>(null);
-const isReady = ref(false);
-let hasLoggedFound = false;
-let hasLoggedNotFound = false;
+function initSceneReferences(): void {
+  const activeScene = scene.value;
+  if (!activeScene) return;
+  const emitter = activeScene.getObjectByName("WaterSpawn");
+  const rightHand = activeScene.getObjectByName("R_Hand");
+  const leftHand = activeScene.getObjectByName("L_Hand");
+  const sink = activeScene.getObjectByName("sink");
 
-function initSystems() {
-  if (!scene.value) return;
-
-  // 1. Locate WaterSpawn
-  const waterSpawn = scene.value.getObjectByName("WaterSpawn");
-  if (waterSpawn) {
-    waterSpawnObject.value = waterSpawn;
-    waterSpawn.getWorldPosition(spawnPosition);
-    waterSystem.points.position.set(0, 0, 0);
-    isReady.value = true;
-
-    if (!hasLoggedFound) {
-      console.log("[WaterSystem] WaterSpawn found");
-      hasLoggedFound = true;
+  if (emitter) {
+    waterSpawn.value = emitter;
+    if (!loggedSpawnFound) {
+      console.info("[WaterSystem] WaterSpawn found");
+      loggedSpawnFound = true;
     }
-  } else if (!hasLoggedNotFound) {
+  } else if (!loggedSpawnMissing) {
     console.warn("[WaterSystem] WaterSpawn not found in GLB");
-    hasLoggedNotFound = true;
+    loggedSpawnMissing = true;
   }
 
-  // 2. Initialize collision system with Hand and Sink objects
-  if (!collisionSystem && scene.value) {
-    collisionSystem = createWaterCollision(scene.value, ["R_Hand", "L_Hand"], "sink");
+  if (!collisionSystem && emitter && rightHand && leftHand && sink) {
+    activeScene.updateMatrixWorld(true);
+    collisionSystem = createWaterCollision(activeScene, ["R_Hand", "L_Hand"], "sink");
+  } else if ((!rightHand || !leftHand || !sink) && !loggedReferencesMissing) {
+    console.warn("[WaterSystem] Waiting for R_Hand, L_Hand, and sink scene references");
+    loggedReferencesMissing = true;
+  }
+
+  frame.ready = Boolean(emitter && collisionSystem);
+  frame.collision = collisionSystem;
+  for (const effect of effects) {
+    if (effect.object.parent !== activeScene) activeScene.add(effect.object);
   }
 }
 
-watch(
-  () => scene.value,
-  (newScene) => {
-    if (!newScene) return;
-
-    initSystems();
-
-    // Attach stream group to scene
-    if (!newScene.children.includes(waterSystem.points)) {
-      newScene.add(waterSystem.points);
-    }
-    // Attach splash particles group to scene
-    if (!newScene.children.includes(waterSystem.splashPointsGroup)) {
-      newScene.add(waterSystem.splashPointsGroup);
-    }
-  },
-  { immediate: true },
-);
+watch(() => scene.value, initSceneReferences, { immediate: true });
 
 const { onBeforeRender } = useLoop();
-
 onBeforeRender(({ delta }) => {
-  if (!isReady.value) {
-    initSystems();
+  if (!frame.ready) initSceneReferences();
+  frame.active = props.active;
+  frame.delta = Math.min(Math.max(delta, 0), 0.05);
+  if (!frame.active) {
+    for (const effect of effects) effect.update(frame);
     return;
   }
+  frame.time += frame.delta;
 
-  const isVisible = props.active;
-  waterSystem.points.visible = isVisible;
-  waterSystem.splashPointsGroup.visible = isVisible;
-
-  if (!isVisible) return;
-
-  if (waterSpawnObject.value) {
-    waterSpawnObject.value.getWorldPosition(spawnPosition);
-  }
-
-  // Cast stream ray to detect hand collision, hand exit runoff, and sink basin impact
-  let streamHit: StreamHit | undefined = undefined;
+  const emitter = waterSpawn.value;
+  if (emitter) emitter.getWorldPosition(frame.origin);
   if (collisionSystem) {
     collisionSystem.refreshTargets();
-    streamHit = collisionSystem.castStreamRay(spawnPosition, 2.5);
+    frame.hit = collisionSystem.castStreamRay(frame.origin, 2.5);
+  } else {
+    frame.hit = null;
   }
 
-  // Update stream, particles, and collision interactions
-  waterSystem.update(delta, spawnPosition, streamHit, collisionSystem ?? undefined);
+  frame.hasHandFlow = false;
+  frame.hasDrainEntry = false;
+  frame.drainEntryRadius = 0;
+  frame.basinImpact.set(0, 0, 0);
+  for (const effect of effects) effect.update(frame);
 });
 
 onUnmounted(() => {
-  if (scene.value) {
-    scene.value.remove(waterSystem.points);
-    scene.value.remove(waterSystem.splashPointsGroup);
+  for (const effect of effects) {
+    if (effect.object.parent) effect.object.parent.remove(effect.object);
   }
-  waterSystem.dispose();
+  effects.length = 0;
   collisionSystem = null;
-  console.log("[WaterSystem] Cleaned up");
+  frame.collision = null;
+  frame.hit = null;
+  frame.ready = false;
 });
 </script>
 
 <template>
-  <slot />
+  <FaucetStream />
+  <HandWetness />
+  <SinkWaterSurface />
+  <DrainVortex />
+  <WaterDroplets />
 </template>
