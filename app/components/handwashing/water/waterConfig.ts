@@ -21,9 +21,9 @@ export interface WaterSystemConfig {
 }
 
 export const DEFAULT_WATER_CONFIG: WaterSystemConfig = {
-  color: 0x168dff,
-  deepColor: 0x0752ad,
-  foamColor: 0xffdce8,
+  color: 0x2682b2,
+  deepColor: 0x0c2a4a,
+  foamColor: 0xfff5f8,
   streamRadius: 0.053,
   particleCount: 40,
   particleRate: 28,
@@ -33,12 +33,12 @@ export const DEFAULT_WATER_CONFIG: WaterSystemConfig = {
   foamPuffCount: 78,
   foamBubbleCount: 118,
   foamUpdateInterval: 1 / 12,
-  // Each overlapping puff stays translucent; the dense cluster keeps its silhouette.
-  foamOpacity: 0.1,
-  // Expand well beyond both GLB hand bounds so the palms and fingers sit inside.
-  foamHandCoverageMultiplier: 1.55,
+  // Substantial milky foam opacity replacing smoky ghost-like transparency
+  foamOpacity: 0.82,
+  // Focused lather coverage on palm contact zone so hands stay clearly visible
+  foamHandCoverageMultiplier: 1.12,
   // Raise the foam slightly above the center of the hand bounds.
-  foamVerticalOffsetFraction: 0.08,
+  foamVerticalOffsetFraction: 0.06,
   // Displacement is converted to the mesh's local Y scale at runtime.
   surfaceWaveWorldAmplitude: 0.018,
   surfaceImpactRadiusFraction: 0.105,

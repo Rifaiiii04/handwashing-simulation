@@ -4,8 +4,9 @@ import * as THREE from "three";
 import { WaterRuntimeKey, type WaterEffect } from "./waterRuntime";
 import { createWaterMaterial, disposeWaterMaterial, updateWaterMaterial } from "./waterMaterials";
 
-const runtime = inject(WaterRuntimeKey);
+const runtime = inject(WaterRuntimeKey)!;
 if (!runtime) throw new Error("HandWetness requires WaterSystem runtime");
+const config = runtime.config;
 
 interface FoamPuff {
   position: THREE.Vector3;
@@ -26,12 +27,12 @@ interface FoamBubble {
 const foamMaterial = createWaterMaterial(
   "foam",
   0xfffeff,
-  runtime.config.foamColor,
-  runtime.config.foamOpacity,
+  config.foamColor,
+  config.foamOpacity,
 );
 foamMaterial.emissive.set(0xffe8ef);
 foamMaterial.emissiveIntensity = 0.12;
-const foamPuffCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamPuffCount), 96, 160);
+const foamPuffCount = THREE.MathUtils.clamp(Math.floor(config.foamPuffCount), 96, 160);
 foamMaterial.vertexColors = true;
 foamMaterial.needsUpdate = true;
 const foamPuffGeometry = new THREE.SphereGeometry(1, 16, 12);
@@ -43,7 +44,7 @@ foamPuffs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 const instanceMatrix = new THREE.Matrix4();
 const instanceColor = new THREE.Color();
 const foamWhiteTint = new THREE.Color(0xfffeff);
-const foamPinkTint = new THREE.Color(runtime.config.foamColor);
+const foamPinkTint = new THREE.Color(config.foamColor);
 const scratchPosition = new THREE.Vector3();
 const scratchScale = new THREE.Vector3();
 const identity = new THREE.Quaternion();
@@ -85,9 +86,9 @@ for (let index = 0; index < foamPuffPool.length; index++) {
 }
 if (foamPuffs.instanceColor) foamPuffs.instanceColor.needsUpdate = true;
 
-const bubbleCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamBubbleCount), 12, 24);
+const bubbleCount = THREE.MathUtils.clamp(Math.floor(config.foamBubbleCount), 12, 24);
 const bubbleGeometry = new THREE.SphereGeometry(0.065, 12, 10);
-const bubbleMaterial = createWaterMaterial("foam", 0xfffeff, runtime.config.foamColor, 0.88);
+const bubbleMaterial = createWaterMaterial("foam", 0xfffeff, config.foamColor, 0.88);
 bubbleMaterial.emissive.set(0xffe8ef);
 bubbleMaterial.emissiveIntensity = 0.12;
 bubbleMaterial.vertexColors = true;
@@ -212,8 +213,8 @@ function configureForAnchor(anchor: THREE.Mesh): void {
     targetFoamSize.copy(anchorSize);
     foamCenter.copy(anchorCenter);
   }
-  targetFoamSize.multiplyScalar(runtime.config.foamHandCoverageMultiplier);
-  foamCenter.y += targetFoamSize.y * runtime.config.foamVerticalOffsetFraction;
+  targetFoamSize.multiplyScalar(config.foamHandCoverageMultiplier);
+  foamCenter.y += targetFoamSize.y * config.foamVerticalOffsetFraction;
   foamFootprint.copy(targetFoamSize);
 
   // Reposition the bubble pool if the GLB anchor is replaced or reloaded.
