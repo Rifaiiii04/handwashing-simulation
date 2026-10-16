@@ -12,7 +12,7 @@ const geometry = new THREE.CylinderGeometry(
   runtime.config.streamRadius,
   1,
   16,
-  1,
+  16,
   true,
 );
 const material = createWaterMaterial("stream", runtime.config.color, runtime.config.deepColor);
@@ -27,6 +27,9 @@ object.add(mesh);
 const localAxis = new THREE.Vector3(0, 1, 0);
 const direction = new THREE.Vector3();
 const streamCenter = new THREE.Vector3();
+const streamStart = new THREE.Vector3();
+const streamCenterOut = new THREE.Vector3();
+const tempVec = new THREE.Vector3();
 
 const effect: WaterEffect = {
   order: 0,
@@ -36,13 +39,12 @@ const effect: WaterEffect = {
     if (!object.visible) return;
 
     direction.copy(frame.streamDirection);
-    const length = THREE.MathUtils.clamp(
-      streamCenter.subVectors(frame.streamEnd, frame.origin).dot(direction),
-      0.08,
-      3,
-    );
-    streamCenter.copy(frame.origin).addScaledVector(direction, length * 0.5);
-    object.position.copy(streamCenter);
+    // Offset start slightly below WaterSpawn so the stream top clears the faucet nozzle
+    streamStart.copy(frame.origin).addScaledVector(direction, 0.04);
+    const rawLength = tempVec.subVectors(frame.streamEnd, streamStart).dot(direction);
+    const length = THREE.MathUtils.clamp(rawLength, 0.08, 3);
+    streamCenterOut.copy(streamStart).addScaledVector(direction, length * 0.5);
+    object.position.copy(streamCenterOut);
     object.quaternion.setFromUnitVectors(localAxis, direction);
     mesh.scale.set(1, length, 1);
     updateWaterMaterial(material, frame.time);
