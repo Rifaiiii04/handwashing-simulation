@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { onUnmounted, watch } from 'vue'
 import * as THREE from 'three'
 import { useGLTF } from '@tresjs/cientos'
-import { mergeVertices, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js'
+import { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
 
 const { state: model, isLoading } = useGLTF('models/washand.glb')
+const controller = new HandwashingSequenceController()
+const seqState = controller.state
+const stages = controller.stages
 
 /**
  * Subdivide low-poly sink mesh into smooth medium-poly (4,160 triangles),
@@ -240,13 +243,19 @@ watch(
         mesh.material = createAnimeSinkMaterial()
       }
     })
+    controller.bindScene(loaded.scene)
+    controller.restart(true)
   },
   { immediate: true }
 )
+
+onUnmounted(() => {
+  controller.dispose()
+})
 </script>
 
 <template>
-  <div class="w-screen h-screen bg-gray-900">
+  <div class="relative w-screen h-screen bg-gray-900 overflow-hidden select-none">
     <div
       v-if="isLoading"
       class="absolute inset-0 z-10 flex items-center justify-center text-white"
@@ -265,7 +274,132 @@ watch(
       <TresDirectionalLight :position="[-4.0, 4.5, -3.2]" :intensity="1.0" color="#D0E3FA" />
       <OrbitControls />
       <primitive v-if="model?.scene" :object="model.scene" />
-      <HandwashingWaterSystem />
+      <HandwashingWaterSystem :controller="controller" />
     </TresCanvas>
+
+    <!-- Minimal stage & playback overlay controls -->
+    <div
+      v-if="!isLoading"
+      class="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex flex-col items-center px-4"
+    >
+      <div
+        class="pointer-events-auto w-full max-w-4xl rounded-xl border border-slate-700/80 bg-slate-900/85 p-3 text-slate-100 shadow-xl backdrop-blur-md"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 text-xs font-medium text-sky-400">
+              <span>Tahap {{ seqState.stageIndex + 1 }} / {{ stages.length }}</span>
+              <span v-if="seqState.whoStep" class="rounded bg-sky-500/20 px-1.5 py-0.5 text-sky-300">
+                WHO Langkah {{ seqState.whoStep }} / 6
+              </span>
+              <span
+                class="rounded px-1.5 py-0.5"
+                :class="seqState.faucetActive ? 'bg-blue-500/25 text-blue-300' : 'bg-slate-700/70 text-slate-400'"
+              >
+                Keran: {{ seqState.faucetActive ? 'ON' : 'OFF' }}
+              </span>
+              <span
+                v-if="seqState.foamIntensity > 0.01"
+                class="rounded bg-cyan-500/20 px-1.5 py-0.5 text-cyan-300"
+              >
+                Busa: {{ Math.round(seqState.foamIntensity * 100) }}%
+              </span>
+            </div>
+            <h2 class="truncate text-sm font-semibold text-white sm:text-base">
+              {{ seqState.stageLabel }}
+            </h2>
+            <p class="truncate text-xs text-slate-300">
+              {{ seqState.stageDescription }}
+            </p>
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <button
+              type="button"
+              class="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+              :disabled="seqState.stageIndex === 0"
+              @click="controller.prevStage()"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              class="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500"
+              @click="controller.togglePlay()"
+            >
+              {{ seqState.isPlaying ? 'Pause' : 'Play Demo' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+              :disabled="seqState.stageIndex === stages.length - 1"
+              @click="controller.nextStage()"
+            >
+              Next
+            </button>
+            <button
+              type="button"
+              class="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+              @click="controller.reset(false)"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        <!-- Overall & stage progress bar -->
+        <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+          <div
+            class="h-full bg-gradient-to-r from-sky-500 to-cyan-400 transition-all duration-75"
+            :style="{ width: `${Math.round(seqState.sequenceProgress * 100)}%` }"
+          />
+        </div>
+
+        <!-- Active 4-stage selector pills -->
+        <div class="mt-2 flex flex-wrap items-center gap-1.5">
+          <button
+            v-for="(stage, idx) in stages"
+            :key="stage.id"
+            type="button"
+            class="rounded px-2.5 py-1 text-[11px] font-medium transition-colors"
+            :class="
+              idx === seqState.stageIndex
+                ? 'bg-sky-500 text-white shadow-sm'
+                : idx < seqState.stageIndex
+                  ? 'bg-sky-900/50 text-sky-200 hover:bg-sky-800/60'
+                  : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+            "
+            @click="controller.goToStage(idx, true)"
+          >
+            {{ stage.shortLabel }}
+          </button>
+        </div>
+
+        <!-- Status cakupan alur: Tahap 1 s.d. 3 (Ke Keran, Basuh Tangan, Pakai Sabun) -->
+        <div class="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-800 pt-1.5 text-[10px]">
+          <span class="mr-1 font-semibold text-slate-400">Fokus Alur:</span>
+          <span class="rounded bg-sky-500/20 px-1.5 py-0.5 font-medium text-sky-300 border border-sky-500/30">
+            Tahap 1 - 3: Basuh & Pakai Sabun (Aktif)
+          </span>
+          <span class="mx-1 text-slate-600">|</span>
+          <span class="mr-1 font-semibold text-slate-500">6 Langkah Gosok WHO:</span>
+          <span
+            v-for="label in [
+              '1. Telapak Tangan',
+              '2. Punggung Tangan',
+              '3. Sela Jari',
+              '4. Kunci Jari',
+              '5. Ibu Jari',
+              '6. Ujung Jari',
+            ]"
+            :key="label"
+            class="cursor-not-allowed rounded bg-slate-800/50 px-1.5 py-0.5 text-slate-500"
+            title="Akan diaktifkan pada tahap berikutnya setelah pakai sabun"
+          >
+            {{ label }}
+          </span>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

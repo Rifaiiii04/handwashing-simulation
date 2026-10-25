@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-export type WaterMaterialStyle = "stream" | "surface" | "foam";
+export type WaterMaterialStyle = "stream" | "surface" | "foam" | "handSpread";
 
 interface WaterUniforms {
   time: { value: number };
@@ -61,23 +61,21 @@ export function createWaterMaterial(
     baseColor: { value: baseColorObj },
     highlightColor: { value: highlightColorObj },
   };
-
+  const isHandSpread = style === "handSpread";
   const foamOpacity = style === "foam" ? THREE.MathUtils.clamp(opacity, 0, 1) : 1;
-  const transparent = style === "foam" && foamOpacity < 1;
-
+  const transparent = (style === "foam" && foamOpacity < 1) || isHandSpread;
   const material = new THREE.MeshToonMaterial({
     color: style === "foam" ? color : baseColorObj,
     gradientMap: ramp,
     transparent,
-    opacity: foamOpacity,
+    opacity: isHandSpread ? 0.82 : foamOpacity,
     depthTest: true,
-    depthWrite: style === "foam" ? true : !transparent,
-    side: style === "surface" ? THREE.DoubleSide : THREE.FrontSide,
+    depthWrite: !transparent,
+    side: style === "surface" || isHandSpread ? THREE.DoubleSide : THREE.FrontSide,
   });
 
   material.userData.waterMaterial = { uniforms } satisfies WaterMaterialData;
-  material.customProgramCacheKey = () => `anime-90s-water-${style}-v3`;
-
+  material.customProgramCacheKey = () => `bapelkes-toon-water-${style}-v8`;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uWaterTime = uniforms.time;
     shader.uniforms.uDrainLocal = uniforms.drainLocal;
@@ -154,23 +152,18 @@ export function createWaterMaterial(
         transformed.y += (broadWave + crossingWave + fineWave + impactRipple + drainRipple
           - drainDepression * 0.12) * uSurfaceAmplitude;
       ` : style === "stream" ? `
-        // Subtle downward-flowing radial deformation for smooth anime water feel.
-        // Taper to zero at top so stream stays attached to faucet.
-        float flowY = uWaterTime * 6.0;
-        float angle = atan(position.z, position.x);
-        // taper: 0 at top (y=0.5), 1 at bottom (y=-0.5)
-        float taper = smoothstep(0.5, -0.1, position.y);
-
-        float wave1 = sin(position.y * 12.0 - flowY + angle * 2.0) * 0.007;
-        float wave2 = sin(position.y * 26.0 - flowY * 1.4 + angle * 3.0 + 1.7) * 0.004;
-        float wave3 = sin(position.y * 42.0 - flowY * 1.9 - angle * 1.0 + 3.1) * 0.002;
-
-        float radialDisp = (wave1 + wave2 + wave3) * taper;
-        float r = length(position.xz);
-        if (r > 0.0001) {
-          transformed.x += (position.x / r) * radialDisp;
-          transformed.z += (position.z / r) * radialDisp;
-        }
+        float streamV = clamp(0.5 - position.y, 0.0, 1.0);
+        // Clean, smooth gravitational taper (narrowing from spout down to contact)
+        float taper = mix(1.0, 0.82, streamV);
+        // Subtle flare right at contact point
+        float flare = smoothstep(0.90, 1.0, streamV) * 0.18;
+        transformed.xz = position.xz * (taper + flare);
+      ` : style === "handSpread" ? `
+        float spreadDist = length(position.xz);
+        // Dynamic multi-harmonic fluid waves across the expanded water sheet
+        float waveA = sin(spreadDist * 24.0 - uWaterTime * 14.0) * 0.0055;
+        float waveB = sin(position.x * 22.0 + position.z * 18.0 - uWaterTime * 10.0) * 0.0035;
+        transformed.y += waveA + waveB;
       ` : ""}`,
     );
 
@@ -224,66 +217,49 @@ export function createWaterMaterial(
           vec3 outgoingLight = diffuseColor.rgb + totalEmissiveRadiance;
         #endif
       `;
-      shader.fragmentShader = shader.fragmentShader.replace(targetChunk, replacementChunk);
-    } else if (style === "surface") {
-      const targetChunk = "vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;";
-      const replacementChunk = `
-        #if NUM_DIR_LIGHTS > 0
-          vec3 N = normalize(geometryNormal);
-          vec3 L = normalize(directionalLights[0].direction);
-          vec3 V = normalize(vViewPosition);
-          float NdotL = dot(N, L);
-          float fEdge = fwidth(NdotL) * 0.5 + 0.001;
+    } else if (style === "handSpread") {
+      colorPatch = `
+        float distFromCenter = length(vWaterLocalPosition.xz);
+        // Dynamic expanding ripples radiating from palm impact
+        float rippleA = sin(distFromCenter * 28.0 - uWaterTime * 15.0);
+        float rippleB = sin(distFromCenter * 52.0 - uWaterTime * 22.0);
+        // Outward surging flow along the finger ribbons
+        float forwardFlow = sin(-vWaterLocalPosition.z * 36.0 - uWaterTime * 18.0);
+        float combinedSpread = rippleA * 0.45 + rippleB * 0.25 + forwardFlow * 0.30;
 
-          // 1. Distinct 3-tone hard-edged anime cel shadow bands (NO glossy plastic gradients)
-          float deepShadowStep = smoothstep(-0.28 - fEdge, -0.28 + fEdge, NdotL);
-          float litStep        = smoothstep(0.08 - fEdge, 0.08 + fEdge, NdotL);
-          vec3 animeTone       = mix(uWaterDeepColor, uWaterMidColor, deepShadowStep);
-          animeTone            = mix(animeTone, uWaterBaseColor, litStep);
+        float blueMix = clamp(0.82 + combinedSpread * 0.15, 0.65, 0.98);
+        diffuseColor.rgb = mix(uWaterDeepColor, diffuseColor.rgb, blueMix);
 
-          // 2. Clean, intentional concentric ripple rings at faucet impact (NO blurry white patches)
-          vec2 impactOffset = vWaterLocalPosition.xz - uImpactLocal.xz;
-          float impactDist = length(impactOffset);
-          float impactMask = exp(-impactDist * impactDist / max(0.003, uImpactRadius * uImpactRadius * 2.6));
+        // Glistening animated highlights across the wide water sheet & finger gaps
+        float glint = smoothstep(0.66, 0.96, max(rippleA, forwardFlow)) * 0.48;
+        vec3 whiteTint = vec3(0.95, 0.99, 1.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, whiteTint, glint);
 
-          float ripplePhase = impactDist * 34.0 - uWaterTime * 4.6;
-          float rippleWave = sin(ripplePhase);
-          float fRipple = fwidth(rippleWave) * 0.5 + 0.001;
-          // Crisp thin white ripple crest line
-          float rippleCrest = smoothstep(0.84 - fRipple, 0.84 + fRipple, rippleWave) * impactMask;
-          // Hard-edged cel shadow trough line
-          float rippleShadow = smoothstep(0.84 - fRipple, 0.84 + fRipple, -rippleWave) * impactMask;
+        // Soft, natural edge fade out at the outer boundaries of the fingers
+        float edgeFade = 1.0 - smoothstep(0.18, 0.28, distFromCenter);
+        diffuseColor.a = clamp(0.65 + edgeFade * 0.28 + glint * 0.20, 0.0, 0.96);
+      `;
+    } else {
+      colorPatch = `
+        float streamV = clamp(0.5 - vWaterLocalPosition.y, 0.0, 1.0);
+        float streamAngle = atan(vWaterLocalPosition.z, vWaterLocalPosition.x);
 
-          // 3. Clean intentional drain vortex streamlines (NO noisy spots)
-          vec2 drainOffset = vWaterLocalPosition.xz - uDrainLocal.xz;
-          float drainDist = length(drainOffset);
-          float vortexAngle = atan(drainOffset.y, drainOffset.x);
-          float vortexMask = exp(-drainDist * drainDist / max(0.008, uDrainRadius * uDrainRadius * 9.0));
-          float drainCenterMask = smoothstep(uDrainRadius * 0.9, uDrainRadius * 1.6, drainDist);
+        // Smooth downward longitudinal flow lines (clean vertical streaks, no horizontal rings)
+        float flowA = sin(streamAngle * 4.0 + streamV * 4.0 - uWaterTime * 12.0);
+        float flowB = sin(streamAngle * 7.0 - streamV * 3.0 - uWaterTime * 16.0);
+        float streamFlow = flowA * 0.6 + flowB * 0.4;
 
-          float spiralPhase = drainDist * 26.0 + vortexAngle * 2.0 + uWaterTime * 3.4;
-          float spiralWave = sin(spiralPhase);
-          float fSpiral = fwidth(spiralWave) * 0.5 + 0.001;
-          float spiralCrest = smoothstep(0.85 - fSpiral, 0.85 + fSpiral, spiralWave) * vortexMask * drainCenterMask;
-          float spiralShadow = smoothstep(0.85 - fSpiral, 0.85 + fSpiral, -spiralWave) * vortexMask * drainCenterMask;
+        float blueTone = clamp(0.86 + streamFlow * 0.08, 0.74, 0.98);
+        diffuseColor.rgb = mix(uWaterDeepColor, diffuseColor.rgb, blueTone);
 
-          // 4. Controlled, crisp anime specular glints (NOT Blinn-Phong plastic sheen)
-          vec3 H = normalize(L + V);
-          float NdotH = max(dot(N, H), 0.0);
-          float spec = pow(NdotH, 32.0);
-          float fSpec = fwidth(spec) * 0.5 + 0.001;
-          float celGlint = smoothstep(0.72 - fSpec, 0.72 + fSpec, spec) * 0.65;
+        // Longitudinal specular highlight streak
+        float streak = smoothstep(0.76, 0.96, flowA) * 0.30;
 
-          // Cel shadow integration
-          float celShadowAcc = clamp(rippleShadow * 0.60 + spiralShadow * 0.50, 0.0, 1.0);
-          vec3 waterShaded = mix(animeTone, uWaterDeepColor * 0.75, celShadowAcc);
+        // Subtle glint on outer rim
+        float rim = pow(clamp(abs(vWaterLocalPosition.x) / 0.05, 0.0, 1.0), 2.5) * 0.20;
 
-          // Crisp highlight integration
-          float celHighlightAcc = clamp(rippleCrest * 0.95 + spiralCrest * 0.85 + celGlint, 0.0, 1.0);
-          vec3 outgoingLight = mix(waterShaded, uWaterHighlightColor, celHighlightAcc) + totalEmissiveRadiance;
-        #else
-          vec3 outgoingLight = uWaterBaseColor + totalEmissiveRadiance;
-        #endif
+        vec3 highlightTint = vec3(0.92, 0.98, 1.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, highlightTint, clamp(streak + rim, 0.0, 0.48));
       `;
       shader.fragmentShader = shader.fragmentShader.replace(targetChunk, replacementChunk);
     } else if (style === "stream") {

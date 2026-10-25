@@ -2,20 +2,31 @@
 import { onUnmounted, provide, watch } from "vue";
 import { useLoop, useTres } from "@tresjs/core";
 import * as THREE from "three";
+import { HandwashingSequenceController } from "~/lib/handwashing/HandwashingSequenceController";
+import SoapDispenser from "./SoapDispenser.vue";
 import FaucetStream from "./water/FaucetStream.vue";
 import HandWetness from "./water/HandWetness.vue";
 import SinkWaterSurface from "./water/SinkWaterSurface.vue";
 import WaterDroplets from "./water/WaterDroplets.vue";
 import { DEFAULT_WATER_CONFIG, type WaterSystemConfig } from "./water/waterConfig";
-import { WaterRuntimeKey, type WaterEffect, type WaterFrameState, type WaterRuntime } from "./water/waterRuntime";
+import {
+  WaterRuntimeKey,
+  type WaterEffect,
+  type WaterFrameState,
+  type WaterRuntime,
+} from "./water/waterRuntime";
 
 const props = withDefaults(
   defineProps<{
     config?: Partial<WaterSystemConfig>;
     active?: boolean;
+    controller?: HandwashingSequenceController;
   }>(),
   { active: true },
 );
+
+const sequenceController = props.controller ?? new HandwashingSequenceController();
+const ownsController = !props.controller;
 
 const config: WaterSystemConfig = { ...DEFAULT_WATER_CONFIG, ...props.config };
 const { scene } = useTres();
@@ -29,12 +40,13 @@ let referencesReady = false;
 let warnedMissingNodes = false;
 const emitterQuaternion = new THREE.Quaternion();
 const localEmitterPoint = new THREE.Vector3();
-const localFoamPoint = new THREE.Vector3();
 const foamBounds = new THREE.Box3();
+const defaultFoamWorldCenter = new THREE.Vector3();
 
 const frame: WaterFrameState = {
   ready: false,
   active: true,
+  streamActive: false,
   delta: 0,
   time: 0,
   origin: new THREE.Vector3(),
@@ -42,10 +54,24 @@ const frame: WaterFrameState = {
   streamEnd: new THREE.Vector3(),
   handFoamSurface: null,
   sinkWaterSurface: null,
+  sinkMesh: null,
   splashOrigin: new THREE.Vector3(),
   splashActive: false,
   drainLocalPosition: new THREE.Vector3(),
   drainLocalRadius: 0.08,
+  foamIntensity: 0,
+  foamWorldCenter: new THREE.Vector3(),
+  particleMode: "none",
+  particleIntensity: 0,
+  pumpPressProgress: 0,
+  soapBlobVisible: false,
+  soapBlobProgress: 0,
+  receivingPalmWorld: new THREE.Vector3(),
+  resetToken: 0,
+  handsIntersectingStream: false,
+  handContactFactor: 0,
+  handImpactPoint: new THREE.Vector3(),
+  handRunoffOrigin: new THREE.Vector3(),
 };
 
 const effects: WaterEffect[] = [];
@@ -68,7 +94,7 @@ const runtime: WaterRuntime = {
 provide(WaterRuntimeKey, runtime);
 
 function asMesh(object: THREE.Object3D | undefined): THREE.Mesh | null {
-  return object && (object as THREE.Mesh).isMesh ? object as THREE.Mesh : null;
+  return object && (object as THREE.Mesh).isMesh ? (object as THREE.Mesh) : null;
 }
 
 function findStreamEndpoint(surface: THREE.Mesh, sourceWorld: THREE.Vector3): boolean {
@@ -109,7 +135,8 @@ function findStreamEndpoint(surface: THREE.Mesh, sourceWorld: THREE.Vector3): bo
 function findDrainReference(sink: THREE.Mesh, surface: THREE.Mesh): void {
   const surfacePosition = surface.geometry.getAttribute("position");
   const sinkPosition = sink.geometry.getAttribute("position");
-  if (!surfacePosition || surfacePosition.count === 0 || !sinkPosition || sinkPosition.count === 0) return;
+  if (!surfacePosition || surfacePosition.count === 0 || !sinkPosition || sinkPosition.count === 0)
+    return;
   surface.geometry.computeBoundingBox();
   const bounds = surface.geometry.boundingBox;
   if (!bounds) return;
@@ -142,9 +169,6 @@ function findDrainReference(sink: THREE.Mesh, surface: THREE.Mesh): void {
   }
   frame.drainLocalRadius = Math.max(0.045, radius);
 
-  // The sink mesh's lowest broad horizontal floor is the basin center; use
-  // that actual GLB transform for the drain axis, then express it in the
-  // water-surface mesh's local coordinates for the shader.
   sink.updateWorldMatrix(true, false);
   surface.updateWorldMatrix(true, false);
   let minWorldY = Infinity;
@@ -181,8 +205,6 @@ function findDrainReference(sink: THREE.Mesh, surface: THREE.Mesh): void {
     surface.worldToLocal(worldPoint);
     frame.drainLocalPosition.copy(worldPoint);
   } else {
-    // Preserve the named water mesh's own depression center if the sink
-    // geometry does not expose a broad horizontal basin-floor sample.
     frame.drainLocalPosition.set(depressionX, lowestY, depressionZ);
   }
 }
@@ -211,9 +233,15 @@ function initSceneReferences(): void {
   }
 
   if (
-    referencesReady && nextEmitter === emitter && nextFoam === handFoamSurface &&
-    nextWaterSurface === sinkWaterSurface && nextSink === sinkMesh
-  ) return;
+    referencesReady &&
+    nextEmitter === emitter &&
+    nextFoam === handFoamSurface &&
+    nextWaterSurface === sinkWaterSurface &&
+    nextSink === sinkMesh
+  ) {
+    sequenceController.bindScene(activeScene);
+    return;
+  }
 
   activeScene.updateMatrixWorld(true);
   emitter = nextEmitter;
@@ -222,15 +250,20 @@ function initSceneReferences(): void {
   sinkMesh = nextSink;
   nextFoam.geometry.computeBoundingBox();
   foamBounds.copy(nextFoam.geometry.boundingBox ?? new THREE.Box3());
+  nextFoam.getWorldPosition(defaultFoamWorldCenter);
+  frame.foamWorldCenter.copy(defaultFoamWorldCenter);
 
   nextEmitter.getWorldPosition(frame.origin);
   streamReady = findStreamEndpoint(nextWaterSurface, frame.origin);
   findDrainReference(nextSink, nextWaterSurface);
   frame.handFoamSurface = nextFoam;
   frame.sinkWaterSurface = nextWaterSurface;
+  frame.sinkMesh = nextSink;
   frame.ready = streamReady;
   referencesReady = streamReady;
   warnedMissingNodes = false;
+
+  sequenceController.bindScene(activeScene);
 
   for (const effect of effects) {
     if (effect.object && effect.object.parent !== activeScene) activeScene.add(effect.object);
@@ -242,6 +275,9 @@ watch(() => scene.value, initSceneReferences, { immediate: true });
 const { onBeforeRender } = useLoop();
 onBeforeRender(({ delta }) => {
   if (!frame.ready) initSceneReferences();
+  if (!sequenceController.getRig() && scene.value) {
+    sequenceController.bindScene(scene.value);
+  }
   frame.active = props.active;
   frame.delta = Math.min(Math.max(delta, 0), 0.05);
   if (!frame.active) {
@@ -250,6 +286,28 @@ onBeforeRender(({ delta }) => {
   }
 
   frame.time += frame.delta;
+
+  // Advance the procedural handwashing controller inside the single render loop
+  sequenceController.update(frame.delta);
+  const seqState = sequenceController.state;
+  const handRig = sequenceController.getRig();
+
+  frame.streamActive = seqState.faucetActive;
+  frame.foamIntensity = seqState.foamIntensity;
+  frame.particleMode = seqState.particleMode;
+  frame.particleIntensity = seqState.particleIntensity;
+  frame.pumpPressProgress = seqState.pumpPressProgress;
+  frame.soapBlobVisible = seqState.soapBlobVisible;
+  frame.soapBlobProgress = seqState.soapBlobProgress;
+  frame.resetToken = seqState.resetToken;
+
+  if (handRig) {
+    frame.foamWorldCenter.copy(handRig.contactWorldCenter);
+    frame.receivingPalmWorld.copy(handRig.receivingPalmWorld);
+  } else {
+    frame.foamWorldCenter.copy(defaultFoamWorldCenter);
+  }
+
   if (emitter && sinkWaterSurface && handFoamSurface) {
     emitter.getWorldPosition(frame.origin);
     emitter.getWorldQuaternion(emitterQuaternion);
@@ -259,17 +317,49 @@ onBeforeRender(({ delta }) => {
     frame.streamEnd.copy(streamEndpointLocal);
     sinkWaterSurface.localToWorld(frame.streamEnd);
 
-    localFoamPoint.copy(frame.origin);
-    handFoamSurface.worldToLocal(localFoamPoint);
-    const insideFoamFootprint =
-      localFoamPoint.x >= foamBounds.min.x && localFoamPoint.x <= foamBounds.max.x &&
-      localFoamPoint.z >= foamBounds.min.z && localFoamPoint.z <= foamBounds.max.z;
-    frame.splashActive = insideFoamFootprint;
-    if (frame.splashActive) {
-      localFoamPoint.y = foamBounds.max.y;
-      frame.splashOrigin.copy(handFoamSurface.localToWorld(localFoamPoint));
+    const dx = frame.foamWorldCenter.x - frame.origin.x;
+    const dz = frame.foamWorldCenter.z - frame.origin.z;
+    const distXZ = Math.hypot(dx, dz);
+    const isHeightIntercepted =
+      frame.foamWorldCenter.y < frame.origin.y - 0.08 &&
+      frame.foamWorldCenter.y > frame.streamEnd.y + 0.08;
+    const streamIntercepted = seqState.faucetActive && distXZ < 0.22 && isHeightIntercepted;
+
+    const targetFactor = streamIntercepted ? 1.0 : 0.0;
+    frame.handContactFactor = THREE.MathUtils.damp(
+      frame.handContactFactor,
+      targetFactor,
+      14.0,
+      frame.delta,
+    );
+    frame.handsIntersectingStream = frame.handContactFactor > 0.01;
+
+    // Top surface of the cupped hands under the vertical spout
+    frame.handImpactPoint.set(
+      frame.origin.x,
+      frame.foamWorldCenter.y + 0.038,
+      frame.origin.z,
+    );
+
+    // Runoff cascading from under the cupped hands into the basin
+    frame.handRunoffOrigin.set(
+      frame.foamWorldCenter.x * 0.4 + frame.origin.x * 0.6,
+      frame.foamWorldCenter.y - 0.105,
+      frame.origin.z + 0.008,
+    );
+
+    if (seqState.particleMode === "water" && seqState.faucetActive) {
+      if (frame.handsIntersectingStream) {
+        frame.splashOrigin.copy(frame.handImpactPoint);
+      } else {
+        frame.splashOrigin.copy(frame.streamEnd);
+      }
+      frame.splashActive = seqState.particleIntensity > 0.005;
+    } else if (seqState.particleMode === "foam") {
+      frame.splashOrigin.copy(frame.foamWorldCenter);
+      frame.splashActive = seqState.particleIntensity > 0.005;
     } else {
-      handFoamSurface.getWorldPosition(frame.splashOrigin);
+      frame.splashActive = false;
     }
   } else {
     frame.splashActive = false;
@@ -283,12 +373,16 @@ onUnmounted(() => {
     if (effect.object?.parent) effect.object.parent.remove(effect.object);
   }
   effects.length = 0;
+  if (ownsController) {
+    sequenceController.dispose();
+  }
   emitter = null;
   handFoamSurface = null;
   sinkWaterSurface = null;
   sinkMesh = null;
   frame.handFoamSurface = null;
   frame.sinkWaterSurface = null;
+  frame.sinkMesh = null;
   frame.splashActive = false;
   frame.ready = false;
 });
@@ -298,5 +392,6 @@ onUnmounted(() => {
   <FaucetStream />
   <HandWetness />
   <SinkWaterSurface />
+  <SoapDispenser />
   <WaterDroplets />
 </template>

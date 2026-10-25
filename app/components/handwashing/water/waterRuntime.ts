@@ -1,10 +1,12 @@
 import type { InjectionKey } from "vue";
-import * as THREE from "three";
+import type * as THREE from "three";
+import type { HandwashingParticleMode } from "~/lib/handwashing/handwashingConfig";
 import type { WaterSystemConfig } from "./waterConfig";
 
 export interface WaterFrameState {
   ready: boolean;
   active: boolean;
+  streamActive: boolean;
   delta: number;
   time: number;
   origin: THREE.Vector3;
@@ -12,10 +14,24 @@ export interface WaterFrameState {
   streamEnd: THREE.Vector3;
   handFoamSurface: THREE.Mesh | null;
   sinkWaterSurface: THREE.Mesh | null;
+  sinkMesh: THREE.Mesh | null;
   splashOrigin: THREE.Vector3;
   splashActive: boolean;
   drainLocalPosition: THREE.Vector3;
   drainLocalRadius: number;
+  foamIntensity: number;
+  foamWorldCenter: THREE.Vector3;
+  particleMode: HandwashingParticleMode;
+  particleIntensity: number;
+  pumpPressProgress: number;
+  soapBlobVisible: boolean;
+  soapBlobProgress: number;
+  receivingPalmWorld: THREE.Vector3;
+  resetToken: number;
+  handsIntersectingStream: boolean;
+  handContactFactor: number;
+  handImpactPoint: THREE.Vector3;
+  handRunoffOrigin: THREE.Vector3;
 }
 
 export interface WaterEffect {
