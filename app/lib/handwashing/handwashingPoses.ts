@@ -354,75 +354,98 @@ export function evaluateStagePose(
     }
 
     case "dispenseSoap": {
-      // Stage 3 — Apply soap:
-      // Move to dispenser -> Press pump head & catch soap in cupped left palm -> Return to scene 1
-      const rReachIn = THREE.MathUtils.smoothstep(progress, 0.0, 0.18);
-      const lReachIn = THREE.MathUtils.smoothstep(progress, 0.04, 0.22);
+      // Stage 3 — Apply Soap (Pakai Sabun dari Dispenser):
+      // 1. Phase 1 (0.00 -> 0.26): Reach in from washing position with organic arc trajectories
+      //    - Right hand lifts and reaches onto the pump plunger cap
+      //    - Left hand cups (menengadah) and positions directly under the nozzle outlet
+      // 2. Phase 2 (0.26 -> 0.58): Pump press & soap delivery
+      //    - Right hand firmly presses pump head down (pressDepth); wrist complies
+      //    - Soap drops into left palm; left palm exhibits a subtle, springy cushioning recoil
+      //    - Pump head springs back up smoothly
+      // 3. Phase 3 (0.58 -> 1.00): Return to washing position under faucet
+      //    - Left hand glides back to center holding the dispensed soap dollop safely in palm
+      //    - Right hand glides back hovering above ready for the next wash cycle
+      //    - Arrives seamlessly at [rWashOff, lWashOff] with 0% snap or pop on stage transition!
 
-      const rWeight = rReachIn;
-      const lWeight = lReachIn;
+      const reachT = THREE.MathUtils.smoothstep(progress, 0.0, 0.26);
+      const returnT = THREE.MathUtils.smoothstep(progress, 0.62, 0.98);
 
+      // Arc curves for natural, lifelike arm elevation during reach & return
+      const rReachArc = Math.sin(reachT * Math.PI) * 0.035;
+      const lReachArc = Math.sin(reachT * Math.PI) * 0.020;
+      const rReturnArc = Math.sin(returnT * Math.PI) * 0.028;
+      const lReturnArc = Math.sin(returnT * Math.PI) * 0.016;
+
+      // Combined weight and arc height
+      const dispWeight = reachT * (1.0 - returnT);
+      const rArcY = rReachArc * (1.0 - returnT) + rReturnArc * reachT;
+      const lArcY = lReachArc * (1.0 - returnT) + lReturnArc * reachT;
+
+      // Pump press displacement and finger flexion on the cap
       const pressDepth = anchors.pumpStroke * anchors.pumpPressProgress;
-      const pressFlex = anchors.pumpPressProgress * 16;
-      const catchCup = THREE.MathUtils.smoothstep(progress, 0.20, 0.65) * 10;
+      const pressFlex = anchors.pumpPressProgress * 15.0;
 
+      // Left palm cushioning bounce when soap lands (around progress 0.50..0.62)
+      const landNorm = THREE.MathUtils.clamp((progress - 0.50) / 0.12, 0, 1);
+      const landRecoil = Math.sin(landNorm * Math.PI) * 0.007;
+
+      // Rest / washing offsets (from Stage 2 wetHands)
       const rWashOff: [number, number, number] = [-0.016, 0.038, -0.060];
-      const rDispOff: [number, number, number] = [0.34, 0.24 - pressDepth, -0.495];
-
       const lWashOff: [number, number, number] = [-0.036, -0.012, -0.058];
-      const lDispOff: [
-        number,
-        number,
-        number,
-      ] = [0.425, -0.11 - anchors.pumpPressProgress * 0.008, -0.515];
+      const rWashEuler: [number, number, number] = [8, -5, -66];
+      const lWashEuler: [number, number, number] = [10, -2, 46];
 
-      const rWashCurl = -7.6;
-      const lWashCurl = -7.6;
+      // Exact aligned target offsets on dispenser pump cap and nozzle outlet
+      const rDispOff: [number, number, number] = [0.273, 0.130, -0.732];
+      const lDispOff: [number, number, number] = [0.364, 0.056, -0.524];
+      const rDispEuler: [number, number, number] = [18, -8, 64];
+      const lDispEuler: [number, number, number] = [12, -4, 38];
 
       return {
         right: {
           palmOffset: [
-            THREE.MathUtils.lerp(rWashOff[0], rDispOff[0], rWeight),
-            THREE.MathUtils.lerp(rWashOff[1], rDispOff[1], rWeight),
-            THREE.MathUtils.lerp(rWashOff[2], rDispOff[2], rWeight),
+            THREE.MathUtils.lerp(rWashOff[0], rDispOff[0], dispWeight),
+            THREE.MathUtils.lerp(rWashOff[1], rDispOff[1] - pressDepth, dispWeight) + rArcY,
+            THREE.MathUtils.lerp(rWashOff[2], rDispOff[2], dispWeight),
           ],
           palmEulerDeg: [
-            THREE.MathUtils.lerp(8, 16 - anchors.pumpPressProgress * 3, rWeight),
-            THREE.MathUtils.lerp(-5, -6, rWeight),
-            THREE.MathUtils.lerp(-70, 68, rWeight),
+            THREE.MathUtils.lerp(rWashEuler[0], rDispEuler[0] - anchors.pumpPressProgress * 4, dispWeight),
+            THREE.MathUtils.lerp(rWashEuler[1], rDispEuler[1], dispWeight),
+            THREE.MathUtils.lerp(rWashEuler[2], rDispEuler[2], dispWeight),
           ],
           wristEulerDeg: [
-            THREE.MathUtils.lerp(0, -2 + anchors.pumpPressProgress * 6, rWeight),
+            THREE.MathUtils.lerp(0, -2 + anchors.pumpPressProgress * 6, dispWeight),
             0,
             0,
           ],
           fingers: {
             thumb: {
-              curl: THREE.MathUtils.lerp(-14, -6 + pressFlex * 0.2, rWeight),
-              spread: THREE.MathUtils.lerp(-4, -2, rWeight),
+              curl: THREE.MathUtils.lerp(-4, -6 + pressFlex * 0.25, dispWeight),
+              spread: THREE.MathUtils.lerp(-3, -2, dispWeight),
               twist: 0,
+              distalBias: 1.15,
             },
             index: {
-              curl: THREE.MathUtils.lerp(rWashCurl, 3 + pressFlex, rWeight),
-              spread: THREE.MathUtils.lerp(0.25, 0.3, rWeight),
+              curl: THREE.MathUtils.lerp(12, 6 + pressFlex, dispWeight),
+              spread: THREE.MathUtils.lerp(0.1, 0.25, dispWeight),
               twist: 0,
               distalBias: 1.25,
             },
             middle: {
-              curl: THREE.MathUtils.lerp(rWashCurl, 4 + pressFlex, rWeight),
+              curl: THREE.MathUtils.lerp(13, 7 + pressFlex, dispWeight),
               spread: 0,
               twist: 0,
               distalBias: 1.25,
             },
             ring: {
-              curl: THREE.MathUtils.lerp(rWashCurl, 7 + pressFlex * 0.5, rWeight),
-              spread: THREE.MathUtils.lerp(-0.2, -0.3, rWeight),
+              curl: THREE.MathUtils.lerp(13, 8 + pressFlex * 0.7, dispWeight),
+              spread: THREE.MathUtils.lerp(-0.1, -0.25, dispWeight),
               twist: 0,
               distalBias: 1.15,
             },
             pinky: {
-              curl: THREE.MathUtils.lerp(rWashCurl, 9 + pressFlex * 0.4, rWeight),
-              spread: THREE.MathUtils.lerp(-0.45, -0.6, rWeight),
+              curl: THREE.MathUtils.lerp(11, 9 + pressFlex * 0.6, dispWeight),
+              spread: THREE.MathUtils.lerp(-0.2, -0.5, dispWeight),
               twist: 0,
               distalBias: 1.15,
             },
@@ -430,57 +453,57 @@ export function evaluateStagePose(
         },
         left: {
           palmOffset: [
-            THREE.MathUtils.lerp(lWashOff[0], lDispOff[0], lWeight),
-            THREE.MathUtils.lerp(lWashOff[1], lDispOff[1], lWeight),
-            THREE.MathUtils.lerp(lWashOff[2], lDispOff[2], lWeight),
+            THREE.MathUtils.lerp(lWashOff[0], lDispOff[0], dispWeight),
+            THREE.MathUtils.lerp(lWashOff[1], lDispOff[1] - landRecoil, dispWeight) + lArcY,
+            THREE.MathUtils.lerp(lWashOff[2], lDispOff[2], dispWeight),
           ],
           palmEulerDeg: [
-            THREE.MathUtils.lerp(10, 10, lWeight),
-            THREE.MathUtils.lerp(-2, -2, lWeight),
-            THREE.MathUtils.lerp(46, 28, lWeight),
+            THREE.MathUtils.lerp(lWashEuler[0], lDispEuler[0], dispWeight),
+            THREE.MathUtils.lerp(lWashEuler[1], lDispEuler[1], dispWeight),
+            THREE.MathUtils.lerp(lWashEuler[2], lDispEuler[2], dispWeight),
           ],
           wristEulerDeg: [
-            THREE.MathUtils.lerp(0, 2 + catchCup * 0.3, lWeight),
+            THREE.MathUtils.lerp(0, 3 + landRecoil * 180, dispWeight),
             0,
             0,
           ],
           fingers: {
             thumb: {
-              curl: THREE.MathUtils.lerp(-14, -6 + catchCup * 0.4, lWeight),
-              spread: THREE.MathUtils.lerp(-4, -2, lWeight),
+              curl: THREE.MathUtils.lerp(-4, -6, dispWeight),
+              spread: THREE.MathUtils.lerp(-3, -2, dispWeight),
               twist: 0,
               distalBias: 1.15,
             },
             index: {
-              curl: THREE.MathUtils.lerp(lWashCurl, 2 + catchCup, lWeight),
-              spread: 0.25,
+              curl: THREE.MathUtils.lerp(12, 14, dispWeight),
+              spread: THREE.MathUtils.lerp(0.1, 0.25, dispWeight),
               twist: 0,
               distalBias: 1.15,
             },
             middle: {
-              curl: THREE.MathUtils.lerp(lWashCurl, 3 + catchCup, lWeight),
+              curl: THREE.MathUtils.lerp(13, 15, dispWeight),
               spread: 0,
               twist: 0,
               distalBias: 1.15,
             },
             ring: {
-              curl: THREE.MathUtils.lerp(lWashCurl, 3 + catchCup, lWeight),
-              spread: -0.2,
+              curl: THREE.MathUtils.lerp(13, 15, dispWeight),
+              spread: -0.15,
               twist: 0,
               distalBias: 1.15,
             },
             pinky: {
-              curl: THREE.MathUtils.lerp(lWashCurl, 2 + catchCup, lWeight),
-              spread: -0.45,
+              curl: THREE.MathUtils.lerp(11, 13, dispWeight),
+              spread: -0.35,
               twist: 0,
               distalBias: 1.15,
             },
           },
         },
         contactCenterHintOffset: [
-          THREE.MathUtils.lerp(0.12, 0.38, lWeight),
-          THREE.MathUtils.lerp(0.01, -0.02, lWeight),
-          THREE.MathUtils.lerp(-0.06, -0.48, lWeight),
+          THREE.MathUtils.lerp(-0.008, 0.32, dispWeight),
+          THREE.MathUtils.lerp(0.013, 0.08, dispWeight),
+          THREE.MathUtils.lerp(-0.059, -0.62, dispWeight),
         ],
       };
     }

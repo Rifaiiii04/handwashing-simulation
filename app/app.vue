@@ -2,6 +2,7 @@
 import { onUnmounted, watch } from 'vue'
 import * as THREE from 'three'
 import { useGLTF } from '@tresjs/cientos'
+import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
 
 const { state: model, isLoading } = useGLTF('models/washand.glb')

@@ -237,12 +237,26 @@ const soapEffectGroup = new THREE.Group();
 soapEffectGroup.name = "SoapDispenseVisualEffect";
 soapEffectGroup.visible = false;
 
-const dropGeometry = trackGeometry(new THREE.SphereGeometry(cfg.soapBlobRadius, 14, 12));
+const dropGeometry = trackGeometry(new THREE.SphereGeometry(cfg.soapBlobRadius, 18, 14));
 const soapDropMesh = new THREE.Mesh(dropGeometry, soapMaterial);
 soapDropMesh.name = "DispensedSoapBlob";
 
+// 90s anime crisp white specular reflection glint on liquid soap drop
+const glintMaterial = trackMaterial(
+  new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.96,
+  }),
+);
+const glintGeometry = trackGeometry(new THREE.SphereGeometry(cfg.soapBlobRadius * 0.26, 8, 8));
+const glintMesh = new THREE.Mesh(glintGeometry, glintMaterial);
+glintMesh.name = "SoapGlintHighlight";
+glintMesh.position.set(cfg.soapBlobRadius * 0.38, cfg.soapBlobRadius * 0.48, cfg.soapBlobRadius * 0.38);
+soapDropMesh.add(glintMesh);
+
 const strandGeometry = trackGeometry(
-  new THREE.CylinderGeometry(cfg.soapBlobRadius * 0.28, cfg.soapBlobRadius * 0.52, 1, 10),
+  new THREE.CylinderGeometry(cfg.soapBlobRadius * 0.18, cfg.soapBlobRadius * 0.45, 1, 10),
 );
 const soapStrandMesh = new THREE.Mesh(strandGeometry, soapMaterial);
 soapStrandMesh.name = "DispensedSoapStrand";
@@ -316,49 +330,53 @@ const effect: WaterEffect = {
     const p = THREE.MathUtils.clamp(frame.soapBlobProgress, 0, 1);
 
     if (p <= 0.65) {
-      // Falling phase (0 -> 0.65): emerges from nozzle, stretches a short viscous strand, lands on palm
+      // Falling phase (0 -> 0.65): emerges from nozzle tip, stretches an elastic viscous strand, lands on palm
       const fallT = THREE.MathUtils.smoothstep(p / 0.65, 0, 1);
       dropPos.lerpVectors(outletWorld, frame.receivingPalmWorld, fallT);
-      // Slight downward curve
-      dropPos.y += Math.sin(fallT * Math.PI) * 0.015;
+      // Gentle natural parabolic curve downward
+      dropPos.y += Math.sin(fallT * Math.PI) * 0.008;
 
       soapDropMesh.position.copy(dropPos);
-      const stretchY = 1 + Math.sin(fallT * Math.PI) * 0.55;
-      const radiusScale = 0.65 + fallT * 0.35;
+      // Elastic teardrop: stretches in Y as gravity accelerates it down
+      const stretchY = 1.0 + Math.sin(fallT * Math.PI) * 0.60;
+      const radiusScale = 0.68 + fallT * 0.32;
       soapDropMesh.scale.set(radiusScale, stretchY, radiusScale);
-      soapMaterial.opacity = 0.94;
+      soapMaterial.opacity = 0.95;
 
-      // Short viscous strand connecting nozzle to the falling blob during initial emergence
-      if (fallT < 0.62) {
+      // Elastic viscous liquid strand stretching from nozzle opening to the falling droplet
+      if (fallT < 0.68) {
         soapStrandMesh.visible = true;
         strandDir.subVectors(dropPos, outletWorld);
-        const strandLen = Math.max(0.005, strandDir.length());
+        const strandLen = Math.max(0.003, strandDir.length());
         strandMid.copy(outletWorld).addScaledVector(strandDir, 0.5);
         soapStrandMesh.position.copy(strandMid);
         strandDir.normalize();
         soapStrandMesh.quaternion.setFromUnitVectors(upAxis, strandDir);
-        const thinFactor = 1 - fallT / 0.62;
+        // Taper strand dynamically as it stretches and snaps
+        const thinFactor = Math.max(0.01, (1.0 - fallT / 0.68) * 1.15);
         soapStrandMesh.scale.set(thinFactor, strandLen, thinFactor);
       } else {
         soapStrandMesh.visible = false;
       }
-    } else if (p <= 0.82) {
-      // Landed phase on the cupped left palm (0.65 -> 0.82)
-      const settleT = THREE.MathUtils.clamp((p - 0.65) / 0.17, 0, 1);
+    } else if (p <= 0.85) {
+      // Landed dollop phase on the cupped left palm (0.65 -> 0.85):
+      // Stays securely resting on the palm as the hands carry the soap back toward the faucet!
+      const settleT = THREE.MathUtils.clamp((p - 0.65) / 0.20, 0, 1);
       soapStrandMesh.visible = false;
       soapDropMesh.position.copy(frame.receivingPalmWorld);
-      const spread = 1 + settleT * 0.28;
-      const flatten = 0.85 - settleT * 0.32;
+      // Dollop spreads into a smooth, glossy dome on the skin
+      const spread = 1.05 + settleT * 0.25;
+      const flatten = 0.75 - settleT * 0.22;
       soapDropMesh.scale.set(spread, flatten, spread);
-      soapMaterial.opacity = 0.92;
+      soapMaterial.opacity = 0.94;
     } else {
-      // Blending into emerging foam at start of `rubPalms` (0.82 -> 1.0)
-      const fadeT = THREE.MathUtils.clamp((p - 0.82) / 0.18, 0, 1);
+      // Dissolving phase as water hits the soap under the faucet (0.85 -> 1.0)
+      const fadeT = THREE.MathUtils.clamp((p - 0.85) / 0.15, 0, 1);
       soapStrandMesh.visible = false;
-      soapDropMesh.position.lerpVectors(frame.receivingPalmWorld, frame.foamWorldCenter, fadeT);
-      const shrink = (1 - fadeT * 0.75) * 1.15;
-      soapDropMesh.scale.set(shrink, shrink * 0.5, shrink);
-      soapMaterial.opacity = 0.9 * (1 - fadeT);
+      soapDropMesh.position.copy(frame.receivingPalmWorld);
+      const shrink = (1.0 - fadeT * 0.60) * 1.25;
+      soapDropMesh.scale.set(shrink, shrink * 0.45, shrink);
+      soapMaterial.opacity = 0.94 * (1.0 - fadeT);
     }
   },
   dispose() {

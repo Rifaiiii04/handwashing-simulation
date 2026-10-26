@@ -229,9 +229,9 @@ const effect: WaterEffect = {
       // 1. Expansive, dynamic water sheet spreading across palms and between fingers (sela-sela jari)
       handSpreadMesh.visible = true;
       handSpreadMesh.position.set(
-        frame.origin.x,
-        frame.handImpactPoint.y - 0.012,
-        frame.origin.z - 0.028,
+        frame.foamWorldCenter.x,
+        frame.foamWorldCenter.y + 0.016,
+        frame.foamWorldCenter.z - 0.018,
       );
       const dynamicSurge =
         1.0 +
