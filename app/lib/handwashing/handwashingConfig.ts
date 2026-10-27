@@ -178,12 +178,12 @@ export const DEFAULT_SOAP_DISPENSER_CONFIG: SoapDispenserConfig = {
   pumpStroke: 0.042,
   pumpPressWindow: [0.18, 0.38, 0.58],
   soapDropWindow: [0.34, 0.68, 0.98],
-  soapBlobRadius: 0.018,
+  soapBlobRadius: 0.038,
   bottleColor: 0x38b2ac,
   bottleAccentColor: 0xe6fffa,
   pumpMetalColor: 0xdbe4ee,
   outletDarkColor: 0x334155,
-  soapLiquidColor: 0x7ce8ff,
+  soapLiquidColor: 0x5ad8e8,
 };
 
 export const DEFAULT_HANDWASHING_CONFIG: HandwashingSystemConfig = {

@@ -68,14 +68,19 @@ export function createWaterMaterial(
     color: style === "foam" ? color : baseColorObj,
     gradientMap: ramp,
     transparent,
-    opacity: isHandSpread ? 0.82 : foamOpacity,
+    opacity: isHandSpread ? 1.0 : foamOpacity,
     depthTest: true,
     depthWrite: !transparent,
     side: THREE.DoubleSide,
   });
 
   material.userData.waterMaterial = { uniforms } satisfies WaterMaterialData;
-  material.customProgramCacheKey = () => `bapelkes-toon-water-${style}-v9`;
+  if (isHandSpread) {
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -3;
+    material.polygonOffsetUnits = -3;
+  }
+  material.customProgramCacheKey = () => `bapelkes-toon-water-${style}-v12`;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uWaterTime = uniforms.time;
     shader.uniforms.uDrainLocal = uniforms.drainLocal;
@@ -274,31 +279,50 @@ export function createWaterMaterial(
       `;
       shader.fragmentShader = shader.fragmentShader.replace(targetChunk, replacementChunk);
     } else if (style === "handSpread") {
+      // ── Fragment: 90s anime cel water pool resting in cupped palms ────────
+      // Concentric ripples expanding from impact with crisp 3-band cel shading
       const colorPatch = `
-        float distFromCenter = length(vWaterLocalPosition.xz);
-        // Dynamic expanding ripples radiating from palm impact
-        float rippleA = sin(distFromCenter * 28.0 - uWaterTime * 15.0);
-        float rippleB = sin(distFromCenter * 52.0 - uWaterTime * 22.0);
-        // Outward surging flow along the finger ribbons
-        float forwardFlow = sin(-vWaterLocalPosition.z * 36.0 - uWaterTime * 18.0);
-        float combinedSpread = rippleA * 0.45 + rippleB * 0.25 + forwardFlow * 0.30;
+        float dist = length(vWaterLocalPosition.xz);
 
-        float blueMix = clamp(0.82 + combinedSpread * 0.15, 0.65, 0.98);
-        diffuseColor.rgb = mix(uWaterDeepColor, diffuseColor.rgb, blueMix);
+        // Concentric anime ripple waves expanding from stream impact
+        float rippleA = sin(dist * 40.0 - uWaterTime * 22.0);
+        float rippleB = sin(dist * 18.0 - uWaterTime * 10.0);
+        float wave = rippleA * 0.65 + rippleB * 0.35;
 
-        // Glistening animated highlights across the wide water sheet & finger gaps
-        float glint = smoothstep(0.66, 0.96, max(rippleA, forwardFlow)) * 0.48;
-        vec3 whiteTint = vec3(0.95, 0.99, 1.0);
-        diffuseColor.rgb = mix(diffuseColor.rgb, whiteTint, glint);
+        // Hard 3-band cel quantize (step)
+        float isShadow    = step(wave, -0.28);
+        float isHighlight = step(0.38, wave);
+        float isMid       = (1.0 - isShadow) * (1.0 - isHighlight);
 
-        // Soft, natural edge fade out at the outer boundaries of the fingers
-        float edgeFade = 1.0 - smoothstep(0.18, 0.28, distFromCenter);
-        diffuseColor.a = clamp(0.65 + edgeFade * 0.28 + glint * 0.20, 0.0, 0.96);
+        vec3 shadowCol    = uWaterDeepColor;                       // deep navy (#0952a5)
+        vec3 midCol       = uWaterBaseColor;                       // vibrant blue (#168dff)
+        vec3 highlightCol = vec3(0.90, 0.97, 1.0);                // crisp ice-white
+
+        vec3 animeWater = shadowCol * isShadow + midCol * isMid + highlightCol * isHighlight;
+
+        // Controlled anime specular glint crescents
+        float glint = step(0.72, wave) * step(0.55, rippleA);
+        animeWater = mix(animeWater, vec3(1.0, 1.0, 1.0), glint * 0.85);
+
+        diffuseColor.rgb = animeWater;
+
+        // Clean anime edge fade right at the pool perimeter (clean silhouette)
+        float edgeFade = 1.0 - smoothstep(0.068, 0.082, dist);
+        diffuseColor.a = edgeFade * 0.95;
       `;
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <color_fragment>",
         `#include <color_fragment>\n${colorPatch}`,
       );
+
+      // Replace outgoingLight so the disc is self-lit (flat, no scene shading).
+      // This matches how 90s anime draws water — flat colour fills, no 3D lighting.
+      const targetChunk = "vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;";
+      const replacementChunk = `
+        // Flat self-illuminated output — disc colour ignores scene lighting
+        vec3 outgoingLight = diffuseColor.rgb + totalEmissiveRadiance;
+      `;
+      shader.fragmentShader = shader.fragmentShader.replace(targetChunk, replacementChunk);
     } else if (style === "stream") {
       const targetChunk = "vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;";
       const replacementChunk = `
