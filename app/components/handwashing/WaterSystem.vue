@@ -278,6 +278,13 @@ onBeforeRender(({ delta }) => {
   if (!sequenceController.getRig() && scene.value) {
     sequenceController.bindScene(scene.value);
   }
+  if (scene.value) {
+    for (const effect of effects) {
+      if (effect.object && effect.object.parent !== scene.value) {
+        scene.value.add(effect.object);
+      }
+    }
+  }
   frame.active = props.active;
   frame.delta = Math.min(Math.max(delta, 0), 0.05);
   if (!frame.active) {
@@ -344,8 +351,8 @@ onBeforeRender(({ delta }) => {
     // Runoff cascading from under the cupped hands into the basin
     frame.handRunoffOrigin.set(
       frame.foamWorldCenter.x * 0.4 + frame.origin.x * 0.6,
-      frame.foamWorldCenter.y - 0.105,
-      frame.origin.z + 0.008,
+      frame.foamWorldCenter.y - 0.012,
+      frame.origin.z + 0.005,
     );
 
     if (seqState.particleMode === "water" && seqState.faucetActive) {

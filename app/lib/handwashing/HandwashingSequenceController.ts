@@ -280,15 +280,15 @@ export class HandwashingSequenceController {
     if (!nextStage.triggersPump) {
       this.state.pumpPressProgress = 0;
     }
-    if (
-      nextStage.id !== "dispenseSoap" &&
-      nextStage.id !== "rubPalms" &&
-      !(nextStage.id === "moveHandsToFaucet" && previousStage?.id === "dispenseSoap")
-    ) {
+    if (nextStage.id !== "dispenseSoap" && nextStage.id !== "rubPalms") {
       this.state.soapBlobVisible = false;
       this.state.soapBlobProgress = 0;
     }
-    if (nextStage.id === "idle" || nextStage.id === "finish") {
+    if (
+      nextStage.id === "idle" ||
+      nextStage.id === "finish" ||
+      nextStage.id === "moveHandsToFaucet"
+    ) {
       this.state.resetToken += 1;
     }
 
@@ -372,20 +372,6 @@ export class HandwashingSequenceController {
           // 0.65 -> 0.80: dollop safely resting on left palm while hands carry it back to faucet
           this.state.soapBlobProgress = 0.65 + t * 0.15;
         }
-      }
-    } else if (stage.id === "moveHandsToFaucet" && !this.isInitialResetState) {
-      if (progress < 0.85) {
-        // Soap dollop remains visible on left palm while returning under faucet
-        this.state.soapBlobVisible = true;
-        this.state.soapBlobProgress = 0.80;
-      } else if (progress < 0.98) {
-        // Water stream turns on at progress >= 0.85: soap seamlessly dissolves under the flow
-        this.state.soapBlobVisible = true;
-        const washT = THREE.MathUtils.clamp((progress - 0.85) / 0.13, 0, 1);
-        this.state.soapBlobProgress = 0.85 + washT * 0.15;
-      } else {
-        this.state.soapBlobVisible = false;
-        this.state.soapBlobProgress = 0;
       }
     } else if (stage.id === "rubPalms" && progress < 0.25) {
       this.state.soapBlobVisible = true;
