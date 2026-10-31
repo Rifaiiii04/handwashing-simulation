@@ -15,6 +15,10 @@ const scratchPivotOffset = new THREE.Vector3();
 const scratchTargetPalm = new THREE.Vector3();
 const scratchKnuckleWorld = new THREE.Vector3();
 const scratchTipWorld = new THREE.Vector3();
+const scratchWristWorld = new THREE.Vector3();
+const scratchIndexKnuckleWorld = new THREE.Vector3();
+const scratchPinkyKnuckleWorld = new THREE.Vector3();
+const scratchRadialVec = new THREE.Vector3();
 
 export class HandAnimationController {
   private rig: MappedHandPairRig | null = null;
@@ -107,16 +111,36 @@ export class HandAnimationController {
     this.applySingleHandPose(this.rig.right, evaluation.right, poseAlpha, boneAlpha);
     this.applySingleHandPose(this.rig.left, evaluation.left, poseAlpha, boneAlpha);
 
-    // Update live world-space contact center and receiving palm target from actual bone transforms
+    // Update live world-space contact center, palm normals, and receiving palm target from actual bone transforms
     for (const hand of [this.rig.right, this.rig.left]) {
       const midJoints = hand.fingers.middle.joints;
+      const idxJoints = hand.fingers.index.joints;
+      const pnkJoints = hand.fingers.pinky.joints;
+
       if (midJoints.length >= 2) {
         const knuckleBone = midJoints[1]!.bone;
         const tipBone = midJoints[midJoints.length - 1]!.bone;
+        hand.wristJoint.bone.getWorldPosition(scratchWristWorld);
         knuckleBone.getWorldPosition(scratchKnuckleWorld);
         tipBone.getWorldPosition(scratchTipWorld);
         hand.currentKnuckleWorld.copy(scratchKnuckleWorld);
         hand.currentPalmWorld.copy(scratchKnuckleWorld).lerp(scratchTipWorld, 0.42);
+
+        hand.currentFingerForward
+          .subVectors(scratchKnuckleWorld, scratchWristWorld)
+          .normalize();
+
+        if (idxJoints.length >= 2 && pnkJoints.length >= 2) {
+          idxJoints[1]!.bone.getWorldPosition(scratchIndexKnuckleWorld);
+          pnkJoints[1]!.bone.getWorldPosition(scratchPinkyKnuckleWorld);
+          scratchRadialVec
+            .subVectors(scratchIndexKnuckleWorld, scratchPinkyKnuckleWorld)
+            .normalize();
+          hand.currentPalmNormal
+            .crossVectors(hand.currentFingerForward, scratchRadialVec)
+            .multiplyScalar(hand.palmNormalSign)
+            .normalize();
+        }
       } else {
         hand.currentPalmWorld.copy(hand.palmWorldRest);
         hand.currentKnuckleWorld.copy(hand.palmWorldRest);

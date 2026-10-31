@@ -42,6 +42,11 @@ export interface MappedHandRig {
    * -1 when negative Z rotation abducts the index finger toward the thumb.
    */
   readonly spreadSign: 1 | -1;
+  /**
+   * Empirically verified sign for `(middleKnuckle - wrist) x (indexKnuckle - pinkyKnuckle)`
+   * so that `currentPalmNormal` points outward from the palmar surface.
+   */
+  readonly palmNormalSign: 1 | -1;
   readonly armature: THREE.Object3D;
   readonly meshContainer: THREE.Object3D;
   readonly skinnedMeshes: readonly THREE.SkinnedMesh[];
@@ -53,6 +58,8 @@ export interface MappedHandRig {
   readonly palmLocalPivot: THREE.Vector3;
   readonly currentPalmWorld: THREE.Vector3;
   readonly currentKnuckleWorld: THREE.Vector3;
+  readonly currentPalmNormal: THREE.Vector3;
+  readonly currentFingerForward: THREE.Vector3;
   readonly targetPosition: THREE.Vector3;
   readonly targetQuaternion: THREE.Quaternion;
   readonly wristJoint: MappedBoneJoint;
@@ -67,6 +74,10 @@ export interface MappedHandPairRig {
   readonly hasValidSkeleton: boolean;
   readonly contactWorldCenter: THREE.Vector3;
   readonly receivingPalmWorld: THREE.Vector3;
+  readonly rightPalmWorld: THREE.Vector3;
+  readonly leftPalmWorld: THREE.Vector3;
+  readonly rightPalmNormal: THREE.Vector3;
+  readonly leftPalmNormal: THREE.Vector3;
 }
 
 interface JointRestCalibration {
@@ -354,9 +365,10 @@ function repairHandSkinWeights(
  */
 function runEmpiricalAxisProbe(
   armature: THREE.Object3D,
+  rootBone: THREE.Bone,
   classified: Record<FingerName, readonly THREE.Bone[]>,
   opposingHandWorldPos: THREE.Vector3,
-): { curlSign: 1 | -1; spreadSign: 1 | -1 } {
+): { curlSign: 1 | -1; spreadSign: 1 | -1; palmNormalSign: 1 | -1 } {
   const middleChain = classified.middle;
   const middleProximal = middleChain[Math.min(1, middleChain.length - 1)]!;
   const middleTip = middleChain[middleChain.length - 1]!;
@@ -379,6 +391,23 @@ function runEmpiricalAxisProbe(
   armature.updateMatrixWorld(true);
 
   const curlSign: 1 | -1 = distToOpposingAfter < distToOpposingBefore ? 1 : -1;
+
+  // Determine palmNormalSign so `(middleKnuckle - wrist) x (indexKnuckle - pinkyKnuckle) * palmNormalSign`
+  // points outward from the palmar surface (same direction as fingertip flexion).
+  const wristWorld = new THREE.Vector3();
+  const midKnuckleWorld = new THREE.Vector3();
+  const idxKnuckleWorld = new THREE.Vector3();
+  const pnkKnuckleWorld = new THREE.Vector3();
+  rootBone.getWorldPosition(wristWorld);
+  middleProximal.getWorldPosition(midKnuckleWorld);
+  classified.index[Math.min(1, classified.index.length - 1)]!.getWorldPosition(idxKnuckleWorld);
+  classified.pinky[Math.min(1, classified.pinky.length - 1)]!.getWorldPosition(pnkKnuckleWorld);
+
+  const vForward = midKnuckleWorld.sub(wristWorld).normalize();
+  const vRadial = idxKnuckleWorld.sub(pnkKnuckleWorld).normalize();
+  const crossN = new THREE.Vector3().crossVectors(vForward, vRadial).normalize();
+  const curlDir = probeTipAfter.clone().sub(probeTipBefore).multiplyScalar(curlSign);
+  const palmNormalSign: 1 | -1 = curlDir.dot(crossN) >= 0 ? 1 : -1;
 
   // Probe index finger abduction toward thumb around local Z axis
   const indexChain = classified.index;
@@ -405,7 +434,7 @@ function runEmpiricalAxisProbe(
 
   const spreadSign: 1 | -1 = distToThumbAfter < distToThumbBefore ? -1 : 1;
 
-  return { curlSign, spreadSign };
+  return { curlSign, spreadSign, palmNormalSign };
 }
 
 /**
@@ -458,8 +487,9 @@ function buildMappedHandRig(
     skinnedMesh.frustumCulled = false;
   }
 
-  const { curlSign, spreadSign } = runEmpiricalAxisProbe(
+  const { curlSign, spreadSign, palmNormalSign } = runEmpiricalAxisProbe(
     cluster.armatureRoot,
+    cluster.rootBone,
     classified,
     opposingRootWorldPos,
   );
@@ -500,10 +530,14 @@ function buildMappedHandRig(
   const palmLocalPivot = palmWorldRest.clone();
   cluster.armatureRoot.worldToLocal(palmLocalPivot);
 
+  const initialPalmNormal = new THREE.Vector3(cluster.side === "left" ? 0.85 : -0.98, 0.3, 0).normalize();
+  const initialForward = new THREE.Vector3(0, -0.2, -0.98).normalize();
+
   return {
     side: cluster.side,
     curlSign,
     spreadSign,
+    palmNormalSign,
     armature: cluster.armatureRoot,
     meshContainer: cluster.meshContainer,
     skinnedMeshes: cluster.skinnedMeshes,
@@ -515,6 +549,8 @@ function buildMappedHandRig(
     palmLocalPivot,
     currentPalmWorld: palmWorldRest.clone(),
     currentKnuckleWorld: palmWorldRest.clone(),
+    currentPalmNormal: initialPalmNormal,
+    currentFingerForward: initialForward,
     targetPosition: cluster.armatureRoot.position.clone(),
     targetQuaternion: cluster.armatureRoot.quaternion.clone(),
     wristJoint: createMappedJoint(cluster.rootBone),
@@ -558,27 +594,24 @@ export function discoverAndMapHandPairRig(
 
   const receivingPalmWorld = left.palmWorldRest.clone();
 
-  if (enableDiagnostics) {
-    console.info(
-      formatMappedRigSummary({
-        right,
-        left,
-        inspection,
-        hasValidSkeleton,
-        contactWorldCenter,
-        receivingPalmWorld,
-      }),
-    );
-  }
-
-  return {
+  const pairRig: MappedHandPairRig = {
     right,
     left,
     inspection,
     hasValidSkeleton,
     contactWorldCenter,
     receivingPalmWorld,
+    rightPalmWorld: right.currentPalmWorld,
+    leftPalmWorld: left.currentPalmWorld,
+    rightPalmNormal: right.currentPalmNormal,
+    leftPalmNormal: left.currentPalmNormal,
   };
+
+  if (enableDiagnostics) {
+    console.info(formatMappedRigSummary(pairRig));
+  }
+
+  return pairRig;
 }
 
 export function formatMappedRigSummary(rig: MappedHandPairRig): string {

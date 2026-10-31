@@ -21,6 +21,10 @@ export interface WaterFrameState {
   drainLocalRadius: number;
   foamIntensity: number;
   foamWorldCenter: THREE.Vector3;
+  rightPalmWorld: THREE.Vector3;
+  leftPalmWorld: THREE.Vector3;
+  rightPalmNormal: THREE.Vector3;
+  leftPalmNormal: THREE.Vector3;
   particleMode: HandwashingParticleMode;
   particleIntensity: number;
   pumpPressProgress: number;

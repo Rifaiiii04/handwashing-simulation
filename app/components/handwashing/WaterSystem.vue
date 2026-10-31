@@ -61,6 +61,10 @@ const frame: WaterFrameState = {
   drainLocalRadius: 0.08,
   foamIntensity: 0,
   foamWorldCenter: new THREE.Vector3(),
+  rightPalmWorld: new THREE.Vector3(0.12, 1.78, -0.5),
+  leftPalmWorld: new THREE.Vector3(-0.12, 1.78, -0.5),
+  rightPalmNormal: new THREE.Vector3(-0.7, 0.7, 0).normalize(),
+  leftPalmNormal: new THREE.Vector3(0.7, 0.7, 0).normalize(),
   particleMode: "none",
   particleIntensity: 0,
   pumpPressProgress: 0,
@@ -304,6 +308,10 @@ onBeforeRender(({ delta }) => {
   if (handRig) {
     frame.foamWorldCenter.copy(handRig.contactWorldCenter);
     frame.receivingPalmWorld.copy(handRig.receivingPalmWorld);
+    frame.rightPalmWorld.copy(handRig.rightPalmWorld);
+    frame.leftPalmWorld.copy(handRig.leftPalmWorld);
+    frame.rightPalmNormal.copy(handRig.rightPalmNormal);
+    frame.leftPalmNormal.copy(handRig.leftPalmNormal);
   } else {
     frame.foamWorldCenter.copy(defaultFoamWorldCenter);
   }

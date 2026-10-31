@@ -387,25 +387,56 @@ export class HandwashingSequenceController {
         this.state.soapBlobVisible = false;
         this.state.soapBlobProgress = 0;
       }
-    } else if (stage.id === "rubPalms" && progress < 0.25) {
+    } else if (stage.id === "rubPalms" && progress < 0.16) {
+      // Substage A & B (0..0.16): dollop flattens and dissolves into lather as palms meet
       this.state.soapBlobVisible = true;
-      const t = THREE.MathUtils.clamp(progress / 0.25, 0, 1);
-      this.state.soapBlobProgress = 0.85 + t * 0.15;
+      if (progress <= 0.08) {
+        this.state.soapBlobProgress = 0.80;
+      } else {
+        const t = THREE.MathUtils.clamp((progress - 0.08) / 0.08, 0, 1);
+        this.state.soapBlobProgress = 0.80 + t * 0.20;
+      }
     } else {
       this.state.soapBlobVisible = false;
       this.state.soapBlobProgress = 0;
     }
 
-    const stageFoamTarget = THREE.MathUtils.lerp(
-      stage.foamStart,
-      stage.foamEnd,
-      THREE.MathUtils.smoothstep(progress, 0, 1),
-    );
+    let stageFoamTarget: number;
+    if (stage.id === "rubPalms") {
+      if (progress <= 0.08) {
+        // Substage A: liquid soap dollop on left palm, minimal initial foam
+        stageFoamTarget = THREE.MathUtils.lerp(0.0, stage.foamStart * 0.5, progress / 0.08);
+      } else if (progress <= 0.16) {
+        // Substage B: palms meet in contact, soap lathers to initial 0.1 coverage
+        stageFoamTarget = THREE.MathUtils.lerp(
+          stage.foamStart * 0.5,
+          stage.foamStart,
+          (progress - 0.08) / 0.08,
+        );
+      } else if (progress <= 0.84) {
+        // Substages C, D, E: 6 circular rubbing cycles ramp foam coverage from 0.1 to 0.8
+        stageFoamTarget = THREE.MathUtils.lerp(
+          stage.foamStart,
+          stage.foamEnd,
+          THREE.MathUtils.smoothstep(progress, 0.16, 0.84),
+        );
+      } else {
+        // Substage F: both palms fully coated with foam (0.80)
+        stageFoamTarget = stage.foamEnd;
+      }
+    } else {
+      stageFoamTarget = THREE.MathUtils.lerp(
+        stage.foamStart,
+        stage.foamEnd,
+        THREE.MathUtils.smoothstep(progress, 0, 1),
+      );
+    }
+
     this.targetFoamIntensity = stageFoamTarget;
     if (stage.foamStart === 0 && stage.foamEnd === 0) {
       this.state.foamIntensity = 0;
     } else {
-      const foamAlpha = 1 - Math.exp(-this.config.foamDampingLambda * delta);
+      const foamAlpha = delta > 0 ? 1 - Math.exp(-this.config.foamDampingLambda * delta) : 1;
       this.state.foamIntensity = THREE.MathUtils.lerp(
         this.state.foamIntensity,
         this.targetFoamIntensity,

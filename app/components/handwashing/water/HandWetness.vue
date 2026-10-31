@@ -1,44 +1,47 @@
 <script setup lang="ts">
 import { inject, onMounted, onUnmounted } from "vue";
 import * as THREE from "three";
-import { WaterRuntimeKey, type WaterEffect } from "./waterRuntime";
+import { WaterRuntimeKey, type WaterEffect, type WaterFrameState } from "./waterRuntime";
 import { createWaterMaterial, disposeWaterMaterial, updateWaterMaterial } from "./waterMaterials";
 
 const runtime = inject(WaterRuntimeKey)!;
 if (!runtime) throw new Error("HandWetness requires WaterSystem runtime");
-const config = runtime.config;
 
 interface FoamPuff {
-  position: THREE.Vector3;
+  side: "left" | "right";
+  planarU: number;
+  planarV: number;
+  normalLift: number;
   phase: number;
   size: number;
   radialOrder: number;
 }
 
 interface FoamBubble {
-  position: THREE.Vector3;
-  velocity: THREE.Vector3;
+  side: "left" | "right";
+  localOffset: THREE.Vector3;
+  localVelocity: THREE.Vector3;
   age: number;
   lifetime: number;
   size: number;
 }
 
-// Cohesive toon-style cyan/light-blue foam appearance kept subtle so hand motion stays clear
+// Cohesive toon-style white/cyan soap foam appearance kept subtle so hand motion stays clear
 const baseFoamOpacity = THREE.MathUtils.clamp(
-  Math.min(runtime.config.foamOpacity, 0.36),
-  0.12,
-  0.42,
+  Math.min(runtime.config.foamOpacity, 0.42),
+  0.18,
+  0.45,
 );
-const foamCyanColor = new THREE.Color(0x8be9ff);
+const foamCyanColor = new THREE.Color(0x9cecff);
 const foamMaterial = createWaterMaterial(
   "foam",
-  0xf4fdff,
+  0xf8feff,
   foamCyanColor,
   baseFoamOpacity,
 );
-foamMaterial.emissive.set(0xb8f2ff);
-foamMaterial.emissiveIntensity = 0.1;
-const foamPuffCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamPuffCount), 20, 72);
+foamMaterial.emissive.set(0xcef6ff);
+foamMaterial.emissiveIntensity = 0.12;
+const foamPuffCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamPuffCount), 28, 72);
 foamMaterial.vertexColors = true;
 foamMaterial.needsUpdate = true;
 const foamPuffGeometry = new THREE.SphereGeometry(1, 14, 10);
@@ -50,12 +53,25 @@ foamPuffs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 
 const instanceMatrix = new THREE.Matrix4();
 const instanceColor = new THREE.Color();
-const foamWhiteTint = new THREE.Color(0xf6feff);
-const foamCyanTint = new THREE.Color(0x76e4ff);
+const foamWhiteTint = new THREE.Color(0xfaffff);
+const foamCyanTint = new THREE.Color(0x88e8ff);
 const scratchPosition = new THREE.Vector3();
 const scratchScale = new THREE.Vector3();
-const identity = new THREE.Quaternion();
-const localContactOffset = new THREE.Vector3();
+const scratchQuat = new THREE.Quaternion();
+const identityQuat = new THREE.Quaternion();
+const upAxis = new THREE.Vector3(0, 1, 0);
+const fallbackRef = new THREE.Vector3(0, 0, -1);
+const fallbackAlt = new THREE.Vector3(1, 0, 0);
+
+const leftNormal = new THREE.Vector3(0.4, 0.9, 0.1).normalize();
+const leftTangentU = new THREE.Vector3();
+const leftTangentV = new THREE.Vector3();
+const leftSurfaceOrigin = new THREE.Vector3();
+
+const rightNormal = new THREE.Vector3(-0.4, 0.9, 0.1).normalize();
+const rightTangentU = new THREE.Vector3();
+const rightTangentV = new THREE.Vector3();
+const rightSurfaceOrigin = new THREE.Vector3();
 
 let foamSeed = 81421;
 const foamRandom = (): number => {
@@ -64,54 +80,54 @@ const foamRandom = (): number => {
 };
 
 const rawPuffs: FoamPuff[] = Array.from({ length: foamPuffCount }, (_, index) => {
-  const vertical = foamRandom() * 2 - 1;
+  // First 4 puffs seed on the soap-receiving left palm; remaining puffs alternate left/right palms
+  const side: "left" | "right" = index < 4 ? "left" : index % 2 === 0 ? "left" : "right";
   const angle = foamRandom() * Math.PI * 2;
-  const centerBias = index < foamPuffCount * 0.45 ? 0.42 : 0.72;
-  const radius = Math.cbrt(foamRandom()) * centerBias;
-  const planarRadius = Math.sqrt(1 - vertical * vertical) * radius;
+  const centerBias = index < foamPuffCount * 0.45 ? 0.58 : 0.95;
+  const radius = Math.sqrt(foamRandom()) * centerBias;
+  const planarU = Math.cos(angle) * radius;
+  const planarV = Math.sin(angle) * radius * 0.85;
+  const normalLift = (foamRandom() - 0.35) * 0.35;
   const sizeRoll = foamRandom();
-  // Restrained puff sizes so the cluster stays localized between the palms/fingers without obscuring motion
   const size =
-    sizeRoll < 0.22
-      ? 0.16 + foamRandom() * 0.03
-      : sizeRoll < 0.7
-        ? 0.12 + foamRandom() * 0.03
-        : 0.09 + foamRandom() * 0.025;
-  const pos = new THREE.Vector3(
-    Math.cos(angle) * planarRadius,
-    vertical * radius * 0.65,
-    Math.sin(angle) * planarRadius,
-  );
+    sizeRoll < 0.25
+      ? 0.022 + foamRandom() * 0.006
+      : sizeRoll < 0.72
+        ? 0.017 + foamRandom() * 0.005
+        : 0.013 + foamRandom() * 0.004;
+
   return {
-    position: pos,
+    side,
+    planarU,
+    planarV,
+    normalLift,
     phase: foamRandom() * Math.PI * 2,
     size,
-    radialOrder: pos.length(),
+    radialOrder: Math.hypot(planarU, planarV) + (side === "right" ? 0.04 : 0),
   };
 });
 
-// Sort puffs from innermost to outermost so as foamIntensity increases,
-// puffs appear organically from the palm contact core outward
+// Sort puffs from innermost palm core outward so foam spreads organically across both palms
 const foamPuffPool = rawPuffs.sort((a, b) => a.radialOrder - b.radialOrder);
 
 for (let index = 0; index < foamPuffPool.length; index++) {
   const puff = foamPuffPool[index]!;
-  const radialTint = THREE.MathUtils.clamp(puff.radialOrder / 0.72, 0, 1);
+  const radialTint = THREE.MathUtils.clamp(puff.radialOrder / 0.95, 0, 1);
   const cyanAmount = THREE.MathUtils.clamp(
-    0.08 + radialTint * 0.24 + foamRandom() * 0.08,
-    0.05,
-    0.38,
+    0.05 + radialTint * 0.18 + foamRandom() * 0.06,
+    0.04,
+    0.28,
   );
   instanceColor.copy(foamWhiteTint).lerp(foamCyanTint, cyanAmount);
   foamPuffs.setColorAt(index, instanceColor);
 }
 if (foamPuffs.instanceColor) foamPuffs.instanceColor.needsUpdate = true;
 
-const bubbleCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamBubbleCount), 8, 24);
-const bubbleGeometry = new THREE.SphereGeometry(0.048, 12, 10);
-const bubbleMaterial = createWaterMaterial("foam", 0xf6feff, foamCyanColor, 0.78);
-bubbleMaterial.emissive.set(0xc4f5ff);
-bubbleMaterial.emissiveIntensity = 0.1;
+const bubbleCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamBubbleCount), 10, 24);
+const bubbleGeometry = new THREE.SphereGeometry(0.0085, 12, 10);
+const bubbleMaterial = createWaterMaterial("foam", 0xfafeff, foamCyanColor, 0.78);
+bubbleMaterial.emissive.set(0xd4f7ff);
+bubbleMaterial.emissiveIntensity = 0.12;
 bubbleMaterial.vertexColors = true;
 bubbleMaterial.needsUpdate = true;
 const bubbles = new THREE.InstancedMesh(bubbleGeometry, bubbleMaterial, bubbleCount);
@@ -122,58 +138,67 @@ bubbles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 
 const object = new THREE.Group();
 object.name = "HandFoamEffect";
-object.matrixAutoUpdate = false;
 object.add(foamPuffs, bubbles);
 
-const anchorSize = new THREE.Vector3(2, 2, 2);
-const anchorCenter = new THREE.Vector3();
-const baseFoamCenter = new THREE.Vector3();
-const foamCenter = new THREE.Vector3();
-const foamFootprint = new THREE.Vector3(1, 1, 1);
-const handWorldBounds = new THREE.Box3();
-const handLocalBounds = new THREE.Box3();
-const handBoundsScratch = new THREE.Box3();
-const anchorWorldInverse = new THREE.Matrix4();
-const targetFoamSize = new THREE.Vector3();
-
-const bubblePool: FoamBubble[] = Array.from({ length: bubbleCount }, () => ({
-  position: new THREE.Vector3(),
-  velocity: new THREE.Vector3(),
+const bubblePool: FoamBubble[] = Array.from({ length: bubbleCount }, (_, index) => ({
+  side: index % 2 === 0 ? "left" : "right",
+  localOffset: new THREE.Vector3(),
+  localVelocity: new THREE.Vector3(),
   age: 0,
-  lifetime: 2.2,
-  size: 0.65,
+  lifetime: 1.8,
+  size: 0.85,
 }));
+
 const waveInterval = Math.max(1 / 60, Math.min(1 / 30, runtime.config.foamUpdateInterval));
 const deterministic = (index: number, offset: number): number =>
   (index * 0.61803398875 + offset) % 1;
 
+function buildPalmBasis(
+  palmWorld: THREE.Vector3,
+  palmNormalInput: THREE.Vector3,
+  outOrigin: THREE.Vector3,
+  outNormal: THREE.Vector3,
+  outU: THREE.Vector3,
+  outV: THREE.Vector3,
+): void {
+  outNormal.copy(palmNormalInput);
+  if (outNormal.lengthSq() < 1e-4) {
+    outNormal.set(0, 1, 0);
+  } else {
+    outNormal.normalize();
+  }
+  const ref = Math.abs(outNormal.dot(fallbackRef)) < 0.9 ? fallbackRef : fallbackAlt;
+  outU.crossVectors(outNormal, ref).normalize();
+  outV.crossVectors(outNormal, outU).normalize();
+  // Offset above the skeletal palm centerline so foam sits right on the palmar skin surface
+  outOrigin.copy(palmWorld).addScaledVector(outNormal, 0.016);
+}
+
 function respawnBubble(bubble: FoamBubble, index: number, initial = false): void {
   const random = (offset: number): number =>
     initial ? deterministic(index, offset) : Math.random();
-  const footprintX = foamFootprint.x || anchorSize.x;
-  const footprintY = foamFootprint.y || anchorSize.y;
-  const footprintZ = foamFootprint.z || anchorSize.z;
   const angle = random(0.17) * Math.PI * 2;
-  const radius = 0.18 + random(0.43) * 0.42;
-  bubble.position.set(
-    foamCenter.x + Math.cos(angle) * footprintX * radius * 0.45,
-    foamCenter.y + (random(0.71) - 0.46) * footprintY * 0.35,
-    foamCenter.z + Math.sin(angle) * footprintZ * radius * 0.45,
+  const radius = (0.012 + random(0.43) * 0.042);
+  bubble.side = index % 2 === 0 ? "left" : "right";
+  bubble.localOffset.set(
+    Math.cos(angle) * radius,
+    0.004 + random(0.71) * 0.012,
+    Math.sin(angle) * radius * 0.85,
   );
-  bubble.velocity.set(
-    Math.cos(angle) * footprintX * (0.08 + random(0.31) * 0.14),
-    footprintY * (0.08 + random(0.57) * 0.1),
-    Math.sin(angle) * footprintZ * (0.08 + random(0.83) * 0.14),
+  bubble.localVelocity.set(
+    Math.cos(angle) * (0.008 + random(0.31) * 0.012),
+    0.005 + random(0.57) * 0.008,
+    Math.sin(angle) * (0.008 + random(0.83) * 0.012),
   );
   bubble.age = initial ? random(0.29) * 0.55 : 0;
-  bubble.lifetime = 1.6 + random(0.91) * 1.1;
-  bubble.size = 0.72 + random(0.63) * 0.5;
+  bubble.lifetime = 1.4 + random(0.91) * 0.9;
+  bubble.size = 0.75 + random(0.63) * 0.55;
 }
 
 for (let index = 0; index < bubblePool.length; index++) {
   const bubble = bubblePool[index]!;
   respawnBubble(bubble, index, true);
-  const cyanAmount = 0.08 + ((index * 7) % 9) * 0.03;
+  const cyanAmount = 0.06 + ((index * 7) % 9) * 0.025;
   instanceColor.copy(foamWhiteTint).lerp(foamCyanTint, cyanAmount);
   bubbles.setColorAt(index, instanceColor);
 }
@@ -195,60 +220,7 @@ function detachAnchor(): void {
   previousVisibility = null;
 }
 
-function measureHandBounds(anchor: THREE.Mesh): boolean {
-  let root: THREE.Object3D = anchor;
-  while (root.parent) root = root.parent;
-
-  handWorldBounds.makeEmpty();
-  for (const name of ["R_Hand", "L_Hand"]) {
-    const hand = root.getObjectByName(name);
-    if (!hand) continue;
-
-    hand.updateMatrixWorld(true);
-    handBoundsScratch.setFromObject(hand, true);
-    handWorldBounds.union(handBoundsScratch);
-  }
-
-  if (handWorldBounds.isEmpty()) return false;
-
-  anchorWorldInverse.copy(anchor.matrixWorld).invert();
-  handLocalBounds.copy(handWorldBounds).applyMatrix4(anchorWorldInverse);
-  return !handLocalBounds.isEmpty();
-}
-
-function configureForAnchor(anchor: THREE.Mesh): void {
-  anchor.geometry.computeBoundingBox();
-  const bounds = anchor.geometry.boundingBox;
-  if (!bounds) return;
-
-  bounds.getSize(anchorSize);
-  bounds.getCenter(anchorCenter);
-  anchor.updateWorldMatrix(true, false);
-
-  if (measureHandBounds(anchor)) {
-    handLocalBounds.getSize(targetFoamSize);
-    handLocalBounds.getCenter(baseFoamCenter);
-  } else {
-    targetFoamSize.copy(anchorSize);
-    baseFoamCenter.copy(anchorCenter);
-  }
-  // Restrained coverage around the palm contact seam so foam never covers the backs of the hands
-  const coverage = THREE.MathUtils.clamp(runtime.config.foamHandCoverageMultiplier, 0.35, 0.52);
-  targetFoamSize.set(
-    targetFoamSize.x * coverage * 0.58,
-    targetFoamSize.y * coverage * 0.85,
-    targetFoamSize.z * coverage * 0.82,
-  );
-  baseFoamCenter.y += targetFoamSize.y * runtime.config.foamVerticalOffsetFraction;
-  foamCenter.copy(baseFoamCenter);
-  foamFootprint.copy(targetFoamSize);
-
-  for (let index = 0; index < bubblePool.length; index++) {
-    respawnBubble(bubblePool[index]!, index, true);
-  }
-}
-
-function updateFoamPuffs(time: number, intensity: number): void {
+function updateFoamPuffs(frame: WaterFrameState, intensity: number): void {
   const clampedIntensity = THREE.MathUtils.clamp(intensity, 0, 1);
   const activeCount = Math.max(
     1,
@@ -256,36 +228,64 @@ function updateFoamPuffs(time: number, intensity: number): void {
   );
   foamPuffs.count = activeCount;
 
-  const spreadScale = 0.48 + clampedIntensity * 0.52;
-  const footprintX = Math.max(foamFootprint.x * spreadScale, 0.001);
-  const footprintY = Math.max(foamFootprint.y * spreadScale, 0.001);
-  const footprintZ = Math.max(foamFootprint.z * spreadScale, 0.001);
-  const sizeEnvelope = 0.35 + Math.sqrt(clampedIntensity) * 0.65;
+  buildPalmBasis(
+    frame.leftPalmWorld,
+    frame.leftPalmNormal,
+    leftSurfaceOrigin,
+    leftNormal,
+    leftTangentU,
+    leftTangentV,
+  );
+  buildPalmBasis(
+    frame.rightPalmWorld,
+    frame.rightPalmNormal,
+    rightSurfaceOrigin,
+    rightNormal,
+    rightTangentU,
+    rightTangentV,
+  );
+
+  // Tangential spread across each palm surface (from ~28mm early to ~62mm when fully lathered)
+  const palmRadiusU = 0.028 + clampedIntensity * 0.036;
+  const palmRadiusV = 0.024 + clampedIntensity * 0.030;
+  const normalThickness = 0.008 + clampedIntensity * 0.008;
+  const sizeEnvelope = 0.55 + Math.sqrt(clampedIntensity) * 0.65;
+  const time = frame.time;
 
   for (let index = 0; index < activeCount; index++) {
     const puff = foamPuffPool[index]!;
-    const puffThreshold = (index / foamPuffPool.length) * 0.75;
+    const puffThreshold = (index / foamPuffPool.length) * 0.72;
     const localGrowth = THREE.MathUtils.smoothstep(
       clampedIntensity,
       puffThreshold,
-      Math.min(1, puffThreshold + 0.32),
+      Math.min(1, puffThreshold + 0.28),
     );
-    const drift = Math.sin(time * 0.95 + puff.phase) * 0.015;
-    const bob = Math.cos(time * 0.82 + puff.phase * 1.3) * 0.012;
-    const pulse = 1 + Math.sin(time * 1.2 + puff.phase * 1.7) * 0.045;
-    scratchPosition.set(
-      foamCenter.x + puff.position.x * footprintX * 0.5 + drift * footprintX,
-      foamCenter.y + puff.position.y * footprintY * 0.5 + bob * footprintY,
-      foamCenter.z + puff.position.z * footprintZ * 0.5 + drift * footprintZ * 0.55,
-    );
-    const radius =
-      Math.min(footprintX, footprintY, footprintZ) *
-      puff.size *
-      pulse *
-      sizeEnvelope *
-      localGrowth;
-    scratchScale.setScalar(Math.max(0.0001, radius));
-    instanceMatrix.compose(scratchPosition, identity, scratchScale);
+
+    const isLeft = puff.side === "left";
+    const origin = isLeft ? leftSurfaceOrigin : rightSurfaceOrigin;
+    const normal = isLeft ? leftNormal : rightNormal;
+    const tangentU = isLeft ? leftTangentU : rightTangentU;
+    const tangentV = isLeft ? leftTangentV : rightTangentV;
+
+    const swirlU = Math.sin(time * 2.2 + puff.phase) * 0.004;
+    const swirlV = Math.cos(time * 2.0 + puff.phase * 1.3) * 0.004;
+    const pulse = 1 + Math.sin(time * 2.6 + puff.phase * 1.7) * 0.06;
+
+    const offsetU = puff.planarU * palmRadiusU + swirlU;
+    const offsetV = puff.planarV * palmRadiusV + swirlV;
+    const offsetN = puff.normalLift * normalThickness;
+
+    scratchPosition
+      .copy(origin)
+      .addScaledVector(tangentU, offsetU)
+      .addScaledVector(tangentV, offsetV)
+      .addScaledVector(normal, offsetN);
+
+    const radius = Math.max(0.0005, puff.size * pulse * sizeEnvelope * localGrowth);
+    scratchQuat.setFromUnitVectors(upAxis, normal);
+    // Flatten puff slightly along the palm normal so foam hugs the palm surface naturally
+    scratchScale.set(radius * 1.15, radius * 0.52, radius * 1.15);
+    instanceMatrix.compose(scratchPosition, scratchQuat, scratchScale);
     foamPuffs.setMatrixAt(index, instanceMatrix);
   }
   foamPuffs.instanceMatrix.needsUpdate = true;
@@ -300,29 +300,37 @@ function updateBubbles(delta: number, intensity: number): void {
   for (let index = 0; index < activeBubbles; index++) {
     const bubble = bubblePool[index]!;
     bubble.age += delta;
-    bubble.position.addScaledVector(bubble.velocity, delta);
-    bubble.velocity.x += Math.sin(bubble.age * 2.1 + index) * delta * 0.1;
-    bubble.velocity.z += Math.cos(bubble.age * 1.8 + index * 0.7) * delta * 0.08;
+    bubble.localOffset.addScaledVector(bubble.localVelocity, delta);
+
     if (
       bubble.age >= bubble.lifetime ||
-      bubble.position.y > foamCenter.y + foamFootprint.y * 0.5 + anchorSize.y * 0.25 ||
-      bubble.position.x < foamCenter.x - foamFootprint.x * 0.55 ||
-      bubble.position.x > foamCenter.x + foamFootprint.x * 0.55 ||
-      bubble.position.z < foamCenter.z - foamFootprint.z * 0.55 ||
-      bubble.position.z > foamCenter.z + foamFootprint.z * 0.55
+      Math.hypot(bubble.localOffset.x, bubble.localOffset.z) > 0.062 ||
+      bubble.localOffset.y > 0.024
     ) {
       respawnBubble(bubble, index);
     }
 
+    const isLeft = bubble.side === "left";
+    const origin = isLeft ? leftSurfaceOrigin : rightSurfaceOrigin;
+    const normal = isLeft ? leftNormal : rightNormal;
+    const tangentU = isLeft ? leftTangentU : rightTangentU;
+    const tangentV = isLeft ? leftTangentV : rightTangentV;
+
     const lifetime = THREE.MathUtils.clamp(bubble.age / bubble.lifetime, 0, 1);
     const fade = 1 - THREE.MathUtils.smoothstep(lifetime, 0.72, 1);
     const birth = THREE.MathUtils.smoothstep(bubble.age, 0, 0.22);
-    const pulse = 0.92 + Math.sin(bubble.age * 2.3 + index * 1.7) * 0.08;
-    scratchPosition.copy(bubble.position);
+    const pulse = 0.92 + Math.sin(bubble.age * 2.5 + index * 1.7) * 0.08;
+
+    scratchPosition
+      .copy(origin)
+      .addScaledVector(tangentU, bubble.localOffset.x)
+      .addScaledVector(tangentV, bubble.localOffset.z)
+      .addScaledVector(normal, bubble.localOffset.y);
+
     scratchScale.setScalar(
-      bubble.size * pulse * (0.2 + birth * 0.8) * fade * Math.sqrt(clampedIntensity),
+      Math.max(0.0002, bubble.size * pulse * (0.25 + birth * 0.75) * fade * Math.sqrt(clampedIntensity)),
     );
-    instanceMatrix.compose(scratchPosition, identity, scratchScale);
+    instanceMatrix.compose(scratchPosition, identityQuat, scratchScale);
     bubbles.setMatrixAt(index, instanceMatrix);
   }
   bubbles.instanceMatrix.needsUpdate = true;
@@ -339,14 +347,12 @@ const effect: WaterEffect = {
         attachedMesh = nextMesh;
         previousMaterial = nextMesh.material;
         previousVisibility = nextMesh.visible;
-        configureForAnchor(nextMesh);
         nextMesh.visible = false;
       }
     }
 
     if (frame.resetToken !== lastResetToken) {
       lastResetToken = frame.resetToken;
-      foamCenter.copy(baseFoamCenter);
       for (let index = 0; index < bubblePool.length; index++) {
         respawnBubble(bubblePool[index]!, index, true);
       }
@@ -358,16 +364,7 @@ const effect: WaterEffect = {
     );
     if (!object.visible || !attachedMesh) return;
 
-    attachedMesh.updateWorldMatrix(true, false);
-    object.matrix.copy(attachedMesh.matrixWorld);
-    object.matrixWorldNeedsUpdate = true;
-
-    // Follow the live hand-rubbing contact center in the anchor's local space
-    localContactOffset.copy(frame.foamWorldCenter);
-    attachedMesh.worldToLocal(localContactOffset);
-    foamCenter.copy(baseFoamCenter).lerp(localContactOffset, 0.75);
-
-    foamMaterial.opacity = baseFoamOpacity * (0.25 + intensity * 0.75);
+    foamMaterial.opacity = baseFoamOpacity * (0.35 + intensity * 0.65);
     bubbleMaterial.opacity = 0.78 * intensity;
 
     updateWaterMaterial(foamMaterial, frame.time);
@@ -375,7 +372,7 @@ const effect: WaterEffect = {
     rebuildAccumulator += frame.delta;
     if (rebuildAccumulator >= waveInterval) {
       rebuildAccumulator %= waveInterval;
-      updateFoamPuffs(frame.time, intensity);
+      updateFoamPuffs(frame, intensity);
     }
     updateBubbles(frame.delta, intensity);
   },

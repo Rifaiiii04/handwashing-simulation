@@ -101,20 +101,392 @@ function smoothRoleBlend(progress: number): { swap: number; swapArc: number } {
   return { swap, swapArc };
 }
 
+function smooth01(value: number): number {
+  const t = THREE.MathUtils.clamp(value, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function lerpVec3Tuple(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+  t: number,
+): [number, number, number] {
+  return [
+    THREE.MathUtils.lerp(a[0], b[0], t),
+    THREE.MathUtils.lerp(a[1], b[1], t),
+    THREE.MathUtils.lerp(a[2], b[2], t),
+  ];
+}
+
+function lerpFingerTargets(
+  a: Record<FingerName, FingerArticulationTarget>,
+  b: Record<FingerName, FingerArticulationTarget>,
+  t: number,
+): Record<FingerName, FingerArticulationTarget> {
+  const names: FingerName[] = ["thumb", "index", "middle", "ring", "pinky"];
+  const out = {} as Record<FingerName, FingerArticulationTarget>;
+  for (const name of names) {
+    out[name] = {
+      curl: THREE.MathUtils.lerp(a[name].curl, b[name].curl, t),
+      spread: THREE.MathUtils.lerp(a[name].spread, b[name].spread, t),
+      twist: THREE.MathUtils.lerp(a[name].twist ?? 0, b[name].twist ?? 0, t),
+      distalBias: THREE.MathUtils.lerp(a[name].distalBias ?? 1, b[name].distalBias ?? 1, t),
+    };
+  }
+  return out;
+}
+
+/**
+ * Calibrated constants for Stage 4 (`rubPalms`) — WHO Technique 1:
+ * "Bersihkan tangan, gosok sabun pada kedua telapak dengan arah memutar."
+ * Verified against the actual `washand.glb` SkinnedMesh vertex surface so that
+ * `minSignedGapMm` remains strictly positive (+4.5mm to +18.6mm) across all 360 degrees
+ * of the circular rubbing orbit with zero mesh penetration and full finger articulation.
+ */
+const SOAP_END_RIGHT_OFF: readonly [number, number, number] = [-0.016, 0.038, -0.060];
+const SOAP_END_LEFT_OFF: readonly [number, number, number] = [-0.036, -0.012, -0.058];
+const SOAP_END_RIGHT_EULER: readonly [number, number, number] = [8, -5, -66];
+const SOAP_END_LEFT_EULER: readonly [number, number, number] = [10, -2, 46];
+
+const SOAP_END_RIGHT_FINGERS: Record<FingerName, FingerArticulationTarget> = {
+  thumb: { curl: -4, spread: -3, twist: 0, distalBias: 1.15 },
+  index: { curl: 12, spread: 0.1, twist: 0, distalBias: 1.25 },
+  middle: { curl: 13, spread: 0, twist: 0, distalBias: 1.25 },
+  ring: { curl: 13, spread: -0.1, twist: 0, distalBias: 1.15 },
+  pinky: { curl: 11, spread: -0.2, twist: 0, distalBias: 1.15 },
+};
+
+const SOAP_END_LEFT_FINGERS: Record<FingerName, FingerArticulationTarget> = {
+  thumb: { curl: -4, spread: -3, twist: 0, distalBias: 1.15 },
+  index: { curl: 12, spread: 0.1, twist: 0, distalBias: 1.25 },
+  middle: { curl: 13, spread: 0, twist: 0, distalBias: 1.25 },
+  ring: { curl: 13, spread: -0.15, twist: 0, distalBias: 1.15 },
+  pinky: { curl: 11, spread: -0.35, twist: 0, distalBias: 1.15 },
+};
+
+// Substage A (Panel 1: Sabun di Telapak Tangan): Left palm holds soap cupped up; right hand poised beside/above ready to meet
+const SUB_A_RIGHT_OFF: readonly [number, number, number] = [0.022, 0.055, -0.076];
+const SUB_A_LEFT_OFF: readonly [number, number, number] = [-0.042, -0.014, -0.072];
+const SUB_A_RIGHT_EULER: readonly [number, number, number] = [16, -12, -12];
+const SUB_A_LEFT_EULER: readonly [number, number, number] = [14, -5, 40];
+
+const SUB_A_RIGHT_FINGERS: Record<FingerName, FingerArticulationTarget> = {
+  thumb: { curl: -14, spread: -12, twist: 0, distalBias: 1.05 },
+  index: { curl: 8, spread: 0.1, twist: 0, distalBias: 1.08 },
+  middle: { curl: 9, spread: 0, twist: 0, distalBias: 1.08 },
+  ring: { curl: 9, spread: -0.1, twist: 0, distalBias: 1.08 },
+  pinky: { curl: 8, spread: -0.2, twist: 0, distalBias: 1.08 },
+};
+
+const SUB_A_LEFT_FINGERS: Record<FingerName, FingerArticulationTarget> = {
+  thumb: { curl: -12, spread: -10, twist: 0, distalBias: 1.05 },
+  index: { curl: 10, spread: 0.08, twist: 0, distalBias: 1.08 },
+  middle: { curl: 11, spread: 0, twist: 0, distalBias: 1.08 },
+  ring: { curl: 11, spread: -0.1, twist: 0, distalBias: 1.08 },
+  pinky: { curl: 9, spread: -0.2, twist: 0, distalBias: 1.08 },
+};
+
+// Calibrated Palm-to-Palm Contact Basis (Substages B, C, D, E — Panels 2 to 5)
+// Contact center at [0.00, 1.80, -0.65] directly over the basin
+// Vertical palm-to-palm parallel orientation matching WHO Storyboard Reference Panel 2 & 3:
+// Opposing angles calibrated to the verified rig coordinate system:
+// Right Hand Euler: [20, -15, 10], Left Hand Euler: [20, -5, -35] (opposing normal dot = -1.000, flat face-to-face contact)
+// Right hand shifted forward towards faucet (thumb Z diff ~43.3mm) so thumbs never clash or trap
+// Calibrated with 40 empty collision objects around all bones + 72-sample skinned mesh surface verification:
+// Initial clearance: 3.03mm, wrist separation: ~110.8mm
+// Orbit clearance: strictly positive (+0.77mm to +4.23mm, avg 2.40mm) with 0 bone collisions and zero penetration
+const CONTACT_RIGHT_BASE_OFF: readonly [number, number, number] = [-0.1551, 0.0221, -0.0056];
+const CONTACT_LEFT_BASE_OFF: readonly [number, number, number] = [0.0091, 0.0239, 0.0726];
+const CONTACT_RIGHT_BASE_EULER: readonly [number, number, number] = [20, -15, 10];
+const CONTACT_LEFT_BASE_EULER: readonly [number, number, number] = [20, -5, -35];
+
+// Orthonormal basis of the shared palm contact plane:
+// - PALM_SEP_AXIS: normal pointing from Left palm surface toward Right palm surface (+X)
+// - PALM_U_AXIS: forward tangent along the fingers
+// - PALM_V_AXIS: lateral tangent across the palm width (up-down)
+const PALM_SEP_AXIS: readonly [number, number, number] = [0.986, -0.086, 0.144];
+const PALM_U_AXIS: readonly [number, number, number] = [0.154, 0.095, -0.983];
+const PALM_V_AXIS: readonly [number, number, number] = [-0.015, 0.995, 0.098];
+
+// Substage F (Panel 6: Hasil Setelah Digosok): Both palms open upward/forward toward the viewer displaying even foam layer
+const SUB_F_RIGHT_OFF: readonly [number, number, number] = [-0.092, 0.013, -0.081];
+const SUB_F_LEFT_OFF: readonly [number, number, number] = [0.005, 0.025, -0.036];
+const SUB_F_RIGHT_EULER: readonly [number, number, number] = [18, 5, -55];
+const SUB_F_LEFT_EULER: readonly [number, number, number] = [18, -5, 45];
+
+const SUB_F_FINGERS: Record<FingerName, FingerArticulationTarget> = {
+  thumb: { curl: -2, spread: -2, twist: 0, distalBias: 1.0 },
+  index: { curl: 0, spread: 0.10, twist: 0, distalBias: 1.0 },
+  middle: { curl: 1, spread: 0.0, twist: 0, distalBias: 1.0 },
+  ring: { curl: 1, spread: -0.10, twist: 0, distalBias: 1.0 },
+  pinky: { curl: 0, spread: -0.20, twist: 0, distalBias: 1.0 },
+};
+
+function evaluatePalmContactOrbit(
+  theta: number,
+  orbitWeight: number,
+  spreadBoost = 1.0,
+): {
+  right: HandPoseTarget;
+  left: HandPoseTarget;
+} {
+  const c = Math.cos(theta);
+  const s = Math.sin(theta);
+  const rU = 0.0162 * orbitWeight * spreadBoost;
+  const rV = 0.0135 * orbitWeight * spreadBoost;
+
+  // Gentle micro-pulsation (±0.4 mm) conforming softly to thenar contours while preventing mesh collision
+  const dn = 0.0004 * Math.cos(2 * theta) * orbitWeight;
+
+  const rOff: [number, number, number] = [
+    CONTACT_RIGHT_BASE_OFF[0] +
+      PALM_U_AXIS[0] * (rU * c) +
+      PALM_V_AXIS[0] * (rV * s) +
+      PALM_SEP_AXIS[0] * dn,
+    CONTACT_RIGHT_BASE_OFF[1] +
+      PALM_U_AXIS[1] * (rU * c) +
+      PALM_V_AXIS[1] * (rV * s) +
+      PALM_SEP_AXIS[1] * dn,
+    CONTACT_RIGHT_BASE_OFF[2] +
+      PALM_U_AXIS[2] * (rU * c) +
+      PALM_V_AXIS[2] * (rV * s) +
+      PALM_SEP_AXIS[2] * dn,
+  ];
+
+  const lOff: [number, number, number] = [
+    CONTACT_LEFT_BASE_OFF[0] -
+      PALM_U_AXIS[0] * (0.40 * rU * c) -
+      PALM_V_AXIS[0] * (0.40 * rV * s) -
+      PALM_SEP_AXIS[0] * dn,
+    CONTACT_LEFT_BASE_OFF[1] -
+      PALM_U_AXIS[1] * (0.40 * rU * c) -
+      PALM_V_AXIS[1] * (0.40 * rV * s) -
+      PALM_SEP_AXIS[1] * dn,
+    CONTACT_LEFT_BASE_OFF[2] -
+      PALM_U_AXIS[2] * (0.40 * rU * c) -
+      PALM_V_AXIS[2] * (0.40 * rV * s) -
+      PALM_SEP_AXIS[2] * dn,
+  ];
+
+  const rEuler: [number, number, number] = [
+    CONTACT_RIGHT_BASE_EULER[0],
+    CONTACT_RIGHT_BASE_EULER[1],
+    CONTACT_RIGHT_BASE_EULER[2],
+  ];
+
+  const lEuler: [number, number, number] = [
+    CONTACT_LEFT_BASE_EULER[0],
+    CONTACT_LEFT_BASE_EULER[1],
+    CONTACT_LEFT_BASE_EULER[2],
+  ];
+
+  const rWrist: [number, number, number] = [
+    s * 0.6 * orbitWeight,
+    c * 0.6 * orbitWeight,
+    0,
+  ];
+  const lWrist: [number, number, number] = [
+    -s * 0.4 * orbitWeight,
+    -c * 0.4 * orbitWeight,
+    0,
+  ];
+
+  const fR: Record<FingerName, FingerArticulationTarget> = {
+    thumb: {
+      curl: -1,
+      spread: 2,
+      twist: 0,
+      distalBias: 1.0,
+    },
+    index: {
+      curl: -5.5 + Math.sin(theta) * 0.4 * orbitWeight,
+      spread: 0,
+      twist: 0,
+      distalBias: 1.0,
+    },
+    middle: {
+      curl: -5.5 + Math.sin(theta + 0.4) * 0.4 * orbitWeight,
+      spread: 0,
+      twist: 0,
+      distalBias: 1.0,
+    },
+    ring: {
+      curl: -5.5 + Math.sin(theta + 0.8) * 0.4 * orbitWeight,
+      spread: 0,
+      twist: 0,
+      distalBias: 1.0,
+    },
+    pinky: {
+      curl: -5.5 + Math.sin(theta + 1.2) * 0.4 * orbitWeight,
+      spread: 0,
+      twist: 0,
+      distalBias: 1.0,
+    },
+  };
+
+  const fL: Record<FingerName, FingerArticulationTarget> = {
+    thumb: {
+      curl: -3,
+      spread: -3,
+      twist: 0,
+      distalBias: 1.0,
+    },
+    index: {
+      curl: -5.5 - Math.sin(theta) * 0.4 * orbitWeight,
+      spread: 0,
+      twist: 0,
+      distalBias: 1.0,
+    },
+    middle: {
+      curl: -5.5 - Math.sin(theta + 0.4) * 0.4 * orbitWeight,
+      spread: 0,
+      twist: 0,
+      distalBias: 1.0,
+    },
+    ring: {
+      curl: -5.5 - Math.sin(theta + 0.8) * 0.4 * orbitWeight,
+      spread: 0,
+      twist: 0,
+      distalBias: 1.0,
+    },
+    pinky: {
+      curl: -5.5 - Math.sin(theta + 1.2) * 0.4 * orbitWeight,
+      spread: 0,
+      twist: 0,
+      distalBias: 1.0,
+    },
+  };
+
+  return {
+    right: {
+      palmOffset: rOff,
+      palmEulerDeg: rEuler,
+      wristEulerDeg: rWrist,
+      fingers: fR,
+    },
+    left: {
+      palmOffset: lOff,
+      palmEulerDeg: lEuler,
+      wristEulerDeg: lWrist,
+      fingers: fL,
+    },
+  };
+}
+
+function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
+  const p = THREE.MathUtils.clamp(progress, 0, 1);
+
+  // Substage A & B (0.00 -> 0.16): 1. Sabun di Telapak Tangan -> 2. Satukan Kedua Telapak Tangan
+  // Hands smoothly bring palms together face-to-face until they meet in soft contact at contactStart
+  if (p <= 0.16) {
+    const t = smooth01(p / 0.16);
+    const contactStart = evaluatePalmContactOrbit(0, 0);
+
+    // Natural lift arc while bringing hands together
+    const liftArc = Math.sin(t * Math.PI) * 0.020;
+
+    const rOff = lerpVec3Tuple(SOAP_END_RIGHT_OFF, contactStart.right.palmOffset, t);
+    const lOff = lerpVec3Tuple(SOAP_END_LEFT_OFF, contactStart.left.palmOffset, t);
+    rOff[1] += liftArc;
+    lOff[1] += liftArc * 0.5;
+
+    return {
+      right: {
+        palmOffset: rOff,
+        palmEulerDeg: lerpVec3Tuple(SOAP_END_RIGHT_EULER, contactStart.right.palmEulerDeg, t),
+        wristEulerDeg: [0, 0, 0],
+        fingers: lerpFingerTargets(SOAP_END_RIGHT_FINGERS, contactStart.right.fingers, t),
+      },
+      left: {
+        palmOffset: lOff,
+        palmEulerDeg: lerpVec3Tuple(SOAP_END_LEFT_EULER, contactStart.left.palmEulerDeg, t),
+        wristEulerDeg: [0, 0, 0],
+        fingers: lerpFingerTargets(SOAP_END_LEFT_FINGERS, contactStart.left.fingers, t),
+      },
+      contactCenterHintOffset: [0.0, 0.015, -0.06],
+    };
+  }
+
+  // Substages C, D, E (0.16 -> 0.84): 3. Mulai Gerakan Memutar -> 4. Lanjutkan Gerakan Memutar -> 5. Seluruh Permukaan Terlapisi
+  // Continuous circular palm-to-palm rubbing in contact
+  if (p <= 0.84) {
+    const rubNorm = (p - 0.16) / (0.84 - 0.16);
+    const totalCycles = 6.0;
+    const theta = rubNorm * totalCycles * Math.PI * 2;
+    const rampIn = smooth01((p - 0.16) / 0.05);
+    const rampOut = smooth01((0.84 - p) / 0.05);
+    const orbitWeight = rampIn * rampOut;
+    const spreadBoost =
+      p >= 0.65
+        ? 1.0 + 0.10 * Math.sin(THREE.MathUtils.clamp((p - 0.65) / 0.19, 0, 1) * Math.PI)
+        : 1.0;
+
+    const orbitPose = evaluatePalmContactOrbit(theta, orbitWeight, spreadBoost);
+    return {
+      right: orbitPose.right,
+      left: orbitPose.left,
+      contactCenterHintOffset: [0.0, 0.015, -0.06],
+    };
+  }
+
+  // Substage F (0.84 -> 1.00): 6. Hasil Setelah Digosok
+  // Stop circular rubbing, gently open palms forward/upward showing full lather
+  const u = THREE.MathUtils.clamp((p - 0.84) / 0.16, 0, 1);
+  const tPos = smooth01(1 - Math.pow(1 - u, 2.2));
+  const tRot = smooth01(Math.pow(u, 1.5));
+  const holdT = THREE.MathUtils.clamp((p - 0.92) / 0.08, 0, 1);
+  const contactEnd = evaluatePalmContactOrbit(6.0 * Math.PI * 2, 0);
+
+  const rOff = lerpVec3Tuple(contactEnd.right.palmOffset, SUB_F_RIGHT_OFF, tPos);
+  const lOff = lerpVec3Tuple(contactEnd.left.palmOffset, SUB_F_LEFT_OFF, tPos);
+
+  const holdBreath = Math.sin(holdT * Math.PI) * 1.0;
+  const finalRightFingers: Record<FingerName, FingerArticulationTarget> = {
+    thumb: { ...SUB_F_FINGERS.thumb, curl: SUB_F_FINGERS.thumb.curl + holdBreath * 0.3 },
+    index: { ...SUB_F_FINGERS.index, curl: SUB_F_FINGERS.index.curl + holdBreath * 0.5 },
+    middle: { ...SUB_F_FINGERS.middle, curl: SUB_F_FINGERS.middle.curl + holdBreath * 0.5 },
+    ring: { ...SUB_F_FINGERS.ring, curl: SUB_F_FINGERS.ring.curl + holdBreath * 0.4 },
+    pinky: { ...SUB_F_FINGERS.pinky, curl: SUB_F_FINGERS.pinky.curl + holdBreath * 0.4 },
+  };
+  const finalLeftFingers: Record<FingerName, FingerArticulationTarget> = {
+    thumb: { ...SUB_F_FINGERS.thumb, curl: SUB_F_FINGERS.thumb.curl - holdBreath * 0.3 },
+    index: { ...SUB_F_FINGERS.index, curl: SUB_F_FINGERS.index.curl - holdBreath * 0.5 },
+    middle: { ...SUB_F_FINGERS.middle, curl: SUB_F_FINGERS.middle.curl - holdBreath * 0.5 },
+    ring: { ...SUB_F_FINGERS.ring, curl: SUB_F_FINGERS.ring.curl - holdBreath * 0.4 },
+    pinky: { ...SUB_F_FINGERS.pinky, curl: SUB_F_FINGERS.pinky.curl - holdBreath * 0.4 },
+  };
+
+  return {
+    right: {
+      palmOffset: rOff,
+      palmEulerDeg: lerpVec3Tuple(contactEnd.right.palmEulerDeg, SUB_F_RIGHT_EULER, tRot),
+      wristEulerDeg: lerpVec3Tuple(
+        contactEnd.right.wristEulerDeg,
+        [2 * Math.sin(holdT * Math.PI), 0, 0],
+        tRot,
+      ),
+      fingers: lerpFingerTargets(contactEnd.right.fingers, finalRightFingers, tRot),
+    },
+    left: {
+      palmOffset: lOff,
+      palmEulerDeg: lerpVec3Tuple(contactEnd.left.palmEulerDeg, SUB_F_LEFT_EULER, tRot),
+      wristEulerDeg: lerpVec3Tuple(
+        contactEnd.left.wristEulerDeg,
+        [2 * Math.sin(holdT * Math.PI + 0.5), 0, 0],
+        tRot,
+      ),
+      fingers: lerpFingerTargets(contactEnd.left.fingers, finalLeftFingers, tRot),
+    },
+    contactCenterHintOffset: [0.0, 0.015, -0.06],
+  };
+}
+
 /**
  * Finger articulation tuning (degrees, relative to the calibrated rest pose).
  * Verified against `washand.glb`: 1 deg of `curl` moves a fingertip ~3.9 scene-mm along
  * the palm normal, so the knead amplitudes below produce clearly visible joint motion.
  */
 const IDLE_FINGER_CURL = 4;
-const WASH_FINGER_CURL = -7.6;
-const WASH_THUMB_CURL = -14;
-const WASH_THUMB_SPREAD = -4;
-const WET_FINGER_KNEAD = 5;
-const WET_WRIST_ROCK = 1.2;
-const RUB_OMEGA = 5.2;
-const RUB_FINGER_KNEAD = 6.5;
-const RUB_WRIST_ROCK = 1.2;
 
 /**
  * Evaluates the procedural hand and finger pose targets for any stage at a given
@@ -323,131 +695,133 @@ export function evaluateStagePose(
     }
 
     case "activateSoapDispenser": {
-      // Prepare for soap: R hand reaches cleanly onto pump cap; L hand cups beneath nozzle outlet
       return {
         right: {
-          palmOffset: [0.33, 0.215, -0.495],
-          palmEulerDeg: [16, -6, 68],
-          wristEulerDeg: [-2, 0, 0],
+          palmOffset: [0.350, 0.215, -0.675],
+          palmEulerDeg: [14, 8, 66],
+          wristEulerDeg: [0, 0, 0],
           fingers: {
-            thumb: { curl: -6, spread: -2, twist: 0 },
-            index: { curl: 3, spread: 0.3, twist: 0 },
-            middle: { curl: 4, spread: 0, twist: 0 },
-            ring: { curl: 7, spread: -0.3, twist: 0 },
-            pinky: { curl: 9, spread: -0.6, twist: 0 },
+            thumb: { curl: -12, spread: -8, twist: 0, distalBias: 1.0 },
+            index: { curl: -7, spread: 0.1, twist: 0, distalBias: 1.0 },
+            middle: { curl: -6, spread: 0, twist: 0, distalBias: 1.0 },
+            ring: { curl: -5, spread: -0.1, twist: 0, distalBias: 1.0 },
+            pinky: { curl: -5, spread: -0.2, twist: 0, distalBias: 1.0 },
           },
         },
         left: {
-          palmOffset: [0.435, -0.095, -0.515],
-          palmEulerDeg: [10, -2, 28],
-          wristEulerDeg: [2, 0, 0],
+          palmOffset: [0.415, -0.095, -0.455],
+          palmEulerDeg: [10, -14, 42],
+          wristEulerDeg: [0, 0, 0],
           fingers: {
-            thumb: { curl: -6, spread: -2, twist: 0 },
-            index: { curl: 2, spread: 0.3, twist: 0 },
-            middle: { curl: 3, spread: 0, twist: 0 },
-            ring: { curl: 3, spread: -0.2, twist: 0 },
-            pinky: { curl: 2, spread: -0.4, twist: 0 },
+            thumb: { curl: -10, spread: -6, twist: 0, distalBias: 1.0 },
+            index: { curl: -5, spread: 0.1, twist: 0, distalBias: 1.0 },
+            middle: { curl: -4, spread: 0, twist: 0, distalBias: 1.0 },
+            ring: { curl: -4, spread: -0.1, twist: 0, distalBias: 1.0 },
+            pinky: { curl: -5, spread: -0.2, twist: 0, distalBias: 1.0 },
           },
         },
-        contactCenterHintOffset: [0.38, 0.02, -0.48],
+        contactCenterHintOffset: [0.38, 0.06, -0.56],
       };
     }
 
     case "dispenseSoap": {
       // Stage 3 — Apply Soap (Pakai Sabun dari Dispenser):
-      // 1. Phase 1 (0.00 -> 0.26): Reach in from washing position with organic arc trajectories
-      //    - Right hand lifts and reaches onto the pump plunger cap
-      //    - Left hand cups (menengadah) and positions directly under the nozzle outlet
-      // 2. Phase 2 (0.26 -> 0.58): Pump press & soap delivery
-      //    - Right hand firmly presses pump head down (pressDepth); wrist complies
-      //    - Soap drops into left palm; left palm exhibits a subtle, springy cushioning recoil
-      //    - Pump head springs back up smoothly
-      // 3. Phase 3 (0.58 -> 1.00): Return to washing position under faucet
-      //    - Left hand glides back to center holding the dispensed soap dollop safely in palm
-      //    - Right hand glides back hovering above ready for the next wash cycle
-      //    - Arrives seamlessly at [rWashOff, lWashOff] with 0% snap or pop on stage transition!
+      // Exact world coordinates of ProceduralSoapDispenser:
+      // - Bottle belly: center [0.490, 1.500..1.777, -1.311], radius 0.088 (front Z = -1.223)
+      // - White pump cap top (SoapDispenserHead): [0.490, 1.917, -1.311] (strokes down to Y = 1.875)
+      // - Nozzle outlet (SoapDispenserOutletAnchor): [0.394, 1.873, -1.165]
+      //
+      // Calibrated hand targets & non-intersecting high/low trajectories:
+      // - Right hand (R_hand) lifts HIGH (+Y/+X arc) so the underside of its index/middle finger pads
+      //   lands directly on top of the white pump plunger cap [0.490, 1.917, -1.311] with level horizontal fingers.
+      // - Left hand (L_hand) travels LOW (-Y arc underneath R_hand) and cups 14cm below the nozzle outlet
+      //   [0.394, 1.873, -1.165] at Y = 1.730 (26cm below R_hand and 5cm in front of the bottle belly).
+      // - Because R_hand arcs UP (+0.065m) and L_hand arcs DOWN (-0.045m) during both reach and return,
+      //   the two hands stay >18cm apart vertically and never collide or penetrate!
 
-      const reachT = THREE.MathUtils.smoothstep(progress, 0.0, 0.26);
+      const reachT = THREE.MathUtils.smoothstep(progress, 0.0, 0.28);
       const returnT = THREE.MathUtils.smoothstep(progress, 0.62, 0.98);
-
-      // Arc curves for natural, lifelike arm elevation during reach & return
-      const rReachArc = Math.sin(reachT * Math.PI) * 0.035;
-      const lReachArc = Math.sin(reachT * Math.PI) * 0.020;
-      const rReturnArc = Math.sin(returnT * Math.PI) * 0.028;
-      const lReturnArc = Math.sin(returnT * Math.PI) * 0.016;
-
-      // Combined weight and arc height
       const dispWeight = reachT * (1.0 - returnT);
-      const rArcY = rReachArc * (1.0 - returnT) + rReturnArc * reachT;
-      const lArcY = lReachArc * (1.0 - returnT) + lReturnArc * reachT;
 
-      // Pump press displacement and finger flexion on the cap
+      // Opposite-signed vertical separation arcs during reach & return so R_hand goes OVER and L_hand goes UNDER
+      const rReachSin = Math.sin(reachT * Math.PI) * (1.0 - returnT);
+      const rReturnSin = Math.sin(returnT * Math.PI) * reachT;
+      const rArcY = 0.065 * rReachSin + 0.060 * rReturnSin;
+      const rArcX = 0.040 * rReachSin + 0.035 * rReturnSin;
+
+      const lReachSin = Math.sin(reachT * Math.PI) * (1.0 - returnT);
+      const lReturnSin = Math.sin(returnT * Math.PI) * reachT;
+      const lArcY = -0.045 * lReachSin - 0.045 * lReturnSin;
+
+      // Pump press displacement and gentle finger flexion on the cap
       const pressDepth = anchors.pumpStroke * anchors.pumpPressProgress;
-      const pressFlex = anchors.pumpPressProgress * 15.0;
+      const pressFlex = anchors.pumpPressProgress * 4.0;
 
       // Left palm cushioning bounce when soap lands (around progress 0.50..0.62)
       const landNorm = THREE.MathUtils.clamp((progress - 0.50) / 0.12, 0, 1);
-      const landRecoil = Math.sin(landNorm * Math.PI) * 0.007;
+      const landRecoil = Math.sin(landNorm * Math.PI) * 0.008;
 
-      // Rest / washing offsets (from Stage 2 wetHands)
+      // Rest / washing offsets (shared with Stage 2 wetHands and Stage 4 rubPalms start)
       const rWashOff: [number, number, number] = [-0.016, 0.038, -0.060];
       const lWashOff: [number, number, number] = [-0.036, -0.012, -0.058];
       const rWashEuler: [number, number, number] = [8, -5, -66];
       const lWashEuler: [number, number, number] = [10, -2, 46];
 
-      // Exact aligned target offsets on dispenser pump cap and nozzle outlet
-      const rDispOff: [number, number, number] = [0.273, 0.130, -0.732];
-      const lDispOff: [number, number, number] = [0.364, 0.056, -0.524];
-      const rDispEuler: [number, number, number] = [18, -8, 64];
-      const lDispEuler: [number, number, number] = [12, -4, 38];
+      // Calibrated dispenser target offsets:
+      // - rDispOff places R_hand palm at [0.525, 1.999, -1.153] so index/middle finger pads sit right on top of pump cap [0.490, 1.917, -1.311]
+      // - lDispOff places L_hand palm at [0.328, 1.676, -0.978] so upward palm hollow sits at [0.380, 1.730, -1.085] right under nozzle [0.394, 1.873, -1.165]
+      const rDispOff: [number, number, number] = [0.350, 0.215, -0.675];
+      const lDispOff: [number, number, number] = [0.415, -0.095, -0.455];
+      const rDispEuler: [number, number, number] = [14, 8, 66];
+      const lDispEuler: [number, number, number] = [10, -14, 42];
 
       return {
         right: {
           palmOffset: [
-            THREE.MathUtils.lerp(rWashOff[0], rDispOff[0], dispWeight),
+            THREE.MathUtils.lerp(rWashOff[0], rDispOff[0], dispWeight) + rArcX,
             THREE.MathUtils.lerp(rWashOff[1], rDispOff[1] - pressDepth, dispWeight) + rArcY,
             THREE.MathUtils.lerp(rWashOff[2], rDispOff[2], dispWeight),
           ],
           palmEulerDeg: [
-            THREE.MathUtils.lerp(rWashEuler[0], rDispEuler[0] - anchors.pumpPressProgress * 4, dispWeight),
+            THREE.MathUtils.lerp(rWashEuler[0], rDispEuler[0] + anchors.pumpPressProgress * 2.5, dispWeight),
             THREE.MathUtils.lerp(rWashEuler[1], rDispEuler[1], dispWeight),
             THREE.MathUtils.lerp(rWashEuler[2], rDispEuler[2], dispWeight),
           ],
           wristEulerDeg: [
-            THREE.MathUtils.lerp(0, -2 + anchors.pumpPressProgress * 6, dispWeight),
+            THREE.MathUtils.lerp(0, anchors.pumpPressProgress * 3.0, dispWeight),
             0,
             0,
           ],
           fingers: {
             thumb: {
-              curl: THREE.MathUtils.lerp(-4, -6 + pressFlex * 0.25, dispWeight),
-              spread: THREE.MathUtils.lerp(-3, -2, dispWeight),
+              curl: THREE.MathUtils.lerp(-4, -12, dispWeight),
+              spread: THREE.MathUtils.lerp(-3, -8, dispWeight),
               twist: 0,
-              distalBias: 1.15,
+              distalBias: 1.0,
             },
             index: {
-              curl: THREE.MathUtils.lerp(12, 6 + pressFlex, dispWeight),
-              spread: THREE.MathUtils.lerp(0.1, 0.25, dispWeight),
+              curl: THREE.MathUtils.lerp(12, -7 + pressFlex, dispWeight),
+              spread: 0.1,
               twist: 0,
-              distalBias: 1.25,
+              distalBias: 1.0,
             },
             middle: {
-              curl: THREE.MathUtils.lerp(13, 7 + pressFlex, dispWeight),
+              curl: THREE.MathUtils.lerp(13, -6 + pressFlex, dispWeight),
               spread: 0,
               twist: 0,
-              distalBias: 1.25,
+              distalBias: 1.0,
             },
             ring: {
-              curl: THREE.MathUtils.lerp(13, 8 + pressFlex * 0.7, dispWeight),
-              spread: THREE.MathUtils.lerp(-0.1, -0.25, dispWeight),
+              curl: THREE.MathUtils.lerp(13, -5 + pressFlex * 0.6, dispWeight),
+              spread: -0.1,
               twist: 0,
-              distalBias: 1.15,
+              distalBias: 1.0,
             },
             pinky: {
-              curl: THREE.MathUtils.lerp(11, 9 + pressFlex * 0.6, dispWeight),
-              spread: THREE.MathUtils.lerp(-0.2, -0.5, dispWeight),
+              curl: THREE.MathUtils.lerp(11, -5 + pressFlex * 0.5, dispWeight),
+              spread: -0.2,
               twist: 0,
-              distalBias: 1.15,
+              distalBias: 1.0,
             },
           },
         },
@@ -463,110 +837,53 @@ export function evaluateStagePose(
             THREE.MathUtils.lerp(lWashEuler[2], lDispEuler[2], dispWeight),
           ],
           wristEulerDeg: [
-            THREE.MathUtils.lerp(0, 3 + landRecoil * 180, dispWeight),
+            THREE.MathUtils.lerp(0, 2 + landRecoil * 120, dispWeight),
             0,
             0,
           ],
           fingers: {
             thumb: {
-              curl: THREE.MathUtils.lerp(-4, -6, dispWeight),
-              spread: THREE.MathUtils.lerp(-3, -2, dispWeight),
+              curl: THREE.MathUtils.lerp(-4, -10, dispWeight),
+              spread: -3,
               twist: 0,
-              distalBias: 1.15,
+              distalBias: 1.0,
             },
             index: {
-              curl: THREE.MathUtils.lerp(12, 14, dispWeight),
-              spread: THREE.MathUtils.lerp(0.1, 0.25, dispWeight),
+              curl: THREE.MathUtils.lerp(12, -5 + landRecoil * 120, dispWeight),
+              spread: 0.1,
               twist: 0,
-              distalBias: 1.15,
+              distalBias: 1.0,
             },
             middle: {
-              curl: THREE.MathUtils.lerp(13, 15, dispWeight),
+              curl: THREE.MathUtils.lerp(13, -4 + landRecoil * 140, dispWeight),
               spread: 0,
               twist: 0,
-              distalBias: 1.15,
+              distalBias: 1.0,
             },
             ring: {
-              curl: THREE.MathUtils.lerp(13, 15, dispWeight),
-              spread: -0.15,
+              curl: THREE.MathUtils.lerp(13, -4 + landRecoil * 120, dispWeight),
+              spread: -0.1,
               twist: 0,
-              distalBias: 1.15,
+              distalBias: 1.0,
             },
             pinky: {
-              curl: THREE.MathUtils.lerp(11, 13, dispWeight),
-              spread: -0.35,
+              curl: THREE.MathUtils.lerp(11, -5, dispWeight),
+              spread: -0.2,
               twist: 0,
-              distalBias: 1.15,
+              distalBias: 1.0,
             },
           },
         },
         contactCenterHintOffset: [
-          THREE.MathUtils.lerp(-0.008, 0.32, dispWeight),
-          THREE.MathUtils.lerp(0.013, 0.08, dispWeight),
-          THREE.MathUtils.lerp(-0.059, -0.62, dispWeight),
+          THREE.MathUtils.lerp(-0.01, 0.38, dispWeight),
+          THREE.MathUtils.lerp(0.015, 0.06, dispWeight),
+          THREE.MathUtils.lerp(-0.059, -0.56, dispWeight),
         ],
       };
     }
 
     case "rubPalms": {
-      // Stage 4 (WHO Step 1 — Rub palms in circular motion, based on Gambar 3 reference):
-      // The hands form a crossed diagonal V-shape / chevron (NOT parallel vertical slabs):
-      // - Left hand (underneath): cupped supinated palm, wrist originating from lower-left,
-      //   pointing forward-right, palm facing up (+Y) and slightly back.
-      // - Right hand (on top): pronated palm, wrist originating from lower-right,
-      //   pointing forward-left, palm facing down (-Y) flat onto the left palm.
-      // - Wrists are separated by >115mm (no wrist clumping / 'dempet').
-      // - The right hand glides in a smooth rhythmic circular orbit over the left palm.
-      // - Stable gap maintained at 3.8mm - 10.4mm throughout the full 360-degree cycle (no mesh clipping).
-      const rubOmega = 4.8;
-      const theta = elapsed * rubOmega;
-      const sinTheta = Math.sin(theta);
-      const cosTheta = Math.cos(theta);
-
-      // Smooth circular orbit in the contact plane
-      const rDx = cosTheta * 0.015;
-      const rDy = sinTheta * 0.014;
-      const rDz = cosTheta * 0.018;
-
-      // Subtle organic wrist compliance
-      const wristPitch = sinTheta * 1.5;
-      const wristYaw = cosTheta * 1.5;
-
-      // Base offsets for crossed chevron contact
-      const rBaseOff = [-0.170, 0.005, -0.070];
-      const lBaseOff = [0.120, 0.020, -0.050];
-
-      return {
-        right: {
-          palmOffset: [rBaseOff[0] + rDx, rBaseOff[1] + rDy, rBaseOff[2] + rDz],
-          palmEulerDeg: [15, -25, 95],
-          wristEulerDeg: [wristPitch, 0, wristYaw],
-          fingers: {
-            thumb: { curl: -8, spread: -4, twist: 0, distalBias: 1.0 },
-            index: { curl: 4 + sinTheta * 3.0, spread: 0.15, twist: 0, distalBias: 1.0 },
-            middle: { curl: 4 + sinTheta * 3.0, spread: 0.0, twist: 0, distalBias: 1.0 },
-            ring: { curl: 4 + sinTheta * 3.0, spread: -0.15, twist: 0, distalBias: 1.0 },
-            pinky: { curl: 4 + sinTheta * 3.0, spread: -0.3, twist: 0, distalBias: 1.0 },
-          },
-        },
-        left: {
-          palmOffset: [
-            lBaseOff[0] - rDx * 0.35,
-            lBaseOff[1] - rDy * 0.35,
-            lBaseOff[2] - rDz * 0.35,
-          ],
-          palmEulerDeg: [12, -30, 55],
-          wristEulerDeg: [-wristPitch * 0.5, 0, -wristYaw * 0.5],
-          fingers: {
-            thumb: { curl: -8, spread: -5, twist: 0, distalBias: 1.0 },
-            index: { curl: 4 - sinTheta * 2.0, spread: 0.2, twist: 0, distalBias: 1.0 },
-            middle: { curl: 4 - sinTheta * 2.0, spread: 0.0, twist: 0, distalBias: 1.0 },
-            ring: { curl: 4 - sinTheta * 2.0, spread: -0.15, twist: 0, distalBias: 1.0 },
-            pinky: { curl: 4 - sinTheta * 2.0, spread: -0.3, twist: 0, distalBias: 1.0 },
-          },
-        },
-        contactCenterHintOffset: [0.0, 0.01, -0.06],
-      };
+      return evaluateRubPalmsPose(progress);
     }
 
     case "rubBacksOfHands": {

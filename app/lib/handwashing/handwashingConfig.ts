@@ -133,27 +133,26 @@ export const HANDWASHING_STAGES: readonly HandwashingStageConfig[] = [
     triggersPump: true,
     emitsSoap: true,
   },
-];
-
-export const SUBSEQUENT_WHO_STAGES: readonly HandwashingStageConfig[] = [
   {
     id: "rubPalms",
     label: "Tahap 4: Gosok Sabun pada Kedua Telapak (Arah Memutar)",
-    shortLabel: "4. Gosok Memutar",
+    shortLabel: "4. Gosok Telapak",
     description:
-      "Bersihkan tangan, gosok sabun pada kedua telapak dengan arah memutar sesuai panduan WHO.",
+      "Bersihkan tangan, gosok sabun pada kedua telapak dengan arah memutar hingga seluruh permukaan telapak terlapisi busa.",
     whoStep: 1,
-    duration: 5.0,
+    duration: 9.6,
     blendDuration: 0.45,
     faucetActive: false,
-    foamStart: 0.15,
-    foamEnd: 0.40,
+    foamStart: 0.1,
+    foamEnd: 0.8,
     particleMode: "foam",
-    particleIntensity: 0.35,
+    particleIntensity: 0.38,
     triggersPump: false,
     emitsSoap: false,
   },
 ];
+
+export const SUBSEQUENT_WHO_STAGES: readonly HandwashingStageConfig[] = [];
 
 export const DEFAULT_SOAP_DISPENSER_CONFIG: SoapDispenserConfig = {
   // Verified against the GLB sink back-right horizontal deck (y = 1.500, z in [-1.426, -1.181], x in [0.35, 0.85])
@@ -192,6 +191,6 @@ export const DEFAULT_HANDWASHING_CONFIG: HandwashingSystemConfig = {
   poseDampingLambda: 11.5,
   boneDampingLambda: 13.0,
   foamDampingLambda: 6.5,
-  autoLoopDemo: true,
+  autoLoopDemo: false,
   enableRigDiagnostics: false,
 };

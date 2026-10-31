@@ -291,7 +291,7 @@ onUnmounted(() => {
             <div class="flex items-center gap-2 text-xs font-medium text-sky-400">
               <span>Tahap {{ seqState.stageIndex + 1 }} / {{ stages.length }}</span>
               <span v-if="seqState.whoStep" class="rounded bg-sky-500/20 px-1.5 py-0.5 text-sky-300">
-                WHO Langkah {{ seqState.whoStep }} / 6
+                WHO Langkah {{ seqState.whoStep }}
               </span>
               <span
                 class="rounded px-1.5 py-0.5"
@@ -376,26 +376,26 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- Status cakupan alur: Tahap 1 s.d. 3 (Ke Keran, Basuh Tangan, Pakai Sabun) -->
+        <!-- Status cakupan alur: Tahap 1 s.d. 4 (Ke Keran, Basuh Tangan, Pakai Sabun, Gosok Telapak WHO) -->
         <div class="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-800 pt-1.5 text-[10px]">
           <span class="mr-1 font-semibold text-slate-400">Fokus Alur:</span>
           <span class="rounded bg-sky-500/20 px-1.5 py-0.5 font-medium text-sky-300 border border-sky-500/30">
-            Tahap 1 - 3: Basuh & Pakai Sabun (Aktif)
+            Tahap 1 - 4: Basuh, Sabun & Gosok Telapak (Aktif)
           </span>
           <span class="mx-1 text-slate-600">|</span>
-          <span class="mr-1 font-semibold text-slate-500">6 Langkah Gosok WHO:</span>
+          <span class="mr-1 font-semibold text-slate-400">Langkah Berikutnya:</span>
           <span
             v-for="label in [
-              '1. Telapak Tangan',
-              '2. Punggung Tangan',
-              '3. Sela Jari',
-              '4. Kunci Jari',
-              '5. Ibu Jari',
-              '6. Ujung Jari',
+              '5. Punggung Tangan',
+              '6. Sela Jari',
+              '7. Kunci Jari',
+              '8. Ibu Jari',
+              '9. Ujung Jari',
+              '10. Bilas Air',
             ]"
             :key="label"
             class="cursor-not-allowed rounded bg-slate-800/50 px-1.5 py-0.5 text-slate-500"
-            title="Akan diaktifkan pada tahap berikutnya setelah pakai sabun"
+            title="Akan dilanjutkan pada tahap berikutnya"
           >
             {{ label }}
           </span>
