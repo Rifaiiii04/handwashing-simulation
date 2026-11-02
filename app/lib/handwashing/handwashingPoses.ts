@@ -232,12 +232,19 @@ function evaluatePalmContactOrbit(
 } {
   const c = Math.cos(theta);
   const s = Math.sin(theta);
-  const rU = 0.0162 * orbitWeight * spreadBoost;
-  const rV = 0.0135 * orbitWeight * spreadBoost;
 
-  // Gentle micro-pulsation (±0.4 mm) conforming softly to thenar contours while preventing mesh collision
-  const dn = 0.0004 * Math.cos(2 * theta) * orbitWeight;
+  // ─── 1. BALANCED 2D CIRCULAR SCRUBBING ORBIT ──────────────────────────────
+  // Longitudinal stroke along finger direction (rU = 24mm -> 4.8cm total travel)
+  // Lateral sweep across palm width (rV = 19mm -> 3.8cm total sweep)
+  // Ellipticity ratio ~1.26: visually clear, vigorous circular scrubbing from camera view.
+  const rU = 0.024 * orbitWeight * spreadBoost;
+  const rV = 0.019 * orbitWeight * spreadBoost;
 
+  // Dynamic normal micro-compression: hands press slightly deeper during mid-stroke,
+  // yielding smoothly with fleshy contact without penetration (clearance strictly positive).
+  const dn = 0.0008 * Math.cos(2 * theta) * orbitWeight + 0.0008 * orbitWeight;
+
+  // Right hand drives the full scrubbing orbit.
   const rOff: [number, number, number] = [
     CONTACT_RIGHT_BASE_OFF[0] +
       PALM_U_AXIS[0] * (rU * c) +
@@ -253,107 +260,135 @@ function evaluatePalmContactOrbit(
       PALM_SEP_AXIS[2] * dn,
   ];
 
+  // Compliant left hand provides 35% counter-scrub yielding under right hand pressure.
   const lOff: [number, number, number] = [
     CONTACT_LEFT_BASE_OFF[0] -
-      PALM_U_AXIS[0] * (0.40 * rU * c) -
-      PALM_V_AXIS[0] * (0.40 * rV * s) -
+      PALM_U_AXIS[0] * (0.35 * rU * c) -
+      PALM_V_AXIS[0] * (0.35 * rV * s) -
       PALM_SEP_AXIS[0] * dn,
     CONTACT_LEFT_BASE_OFF[1] -
-      PALM_U_AXIS[1] * (0.40 * rU * c) -
-      PALM_V_AXIS[1] * (0.40 * rV * s) -
+      PALM_U_AXIS[1] * (0.35 * rU * c) -
+      PALM_V_AXIS[1] * (0.35 * rV * s) -
       PALM_SEP_AXIS[1] * dn,
     CONTACT_LEFT_BASE_OFF[2] -
-      PALM_U_AXIS[2] * (0.40 * rU * c) -
-      PALM_V_AXIS[2] * (0.40 * rV * s) -
+      PALM_U_AXIS[2] * (0.35 * rU * c) -
+      PALM_V_AXIS[2] * (0.35 * rV * s) -
       PALM_SEP_AXIS[2] * dn,
   ];
 
+  // ─── 2. TANGENTIAL SCRUB ROTATION (SHEAR & PIVOT) ──────────────────────────
+  // Palms shear and pivot against each other as they circle:
+  // Roll (±4.5°), pitch (±3.0°), and yaw (±2.0°) around the active contact point.
+  const scrubRoll = s * 4.5 * orbitWeight;
+  const scrubPitch = c * 3.0 * orbitWeight;
+  const scrubYaw = -s * 2.0 * orbitWeight;
+
   const rEuler: [number, number, number] = [
-    CONTACT_RIGHT_BASE_EULER[0],
-    CONTACT_RIGHT_BASE_EULER[1],
-    CONTACT_RIGHT_BASE_EULER[2],
+    CONTACT_RIGHT_BASE_EULER[0] + scrubPitch,
+    CONTACT_RIGHT_BASE_EULER[1] + scrubYaw,
+    CONTACT_RIGHT_BASE_EULER[2] + scrubRoll,
   ];
 
   const lEuler: [number, number, number] = [
-    CONTACT_LEFT_BASE_EULER[0],
-    CONTACT_LEFT_BASE_EULER[1],
-    CONTACT_LEFT_BASE_EULER[2],
+    CONTACT_LEFT_BASE_EULER[0] - scrubPitch * 0.4,
+    CONTACT_LEFT_BASE_EULER[1] - scrubYaw * 0.4,
+    CONTACT_LEFT_BASE_EULER[2] - scrubRoll * 0.4,
   ];
 
+  // ─── 3. ACTIVE WRIST BIOMECHANICS ──────────────────────────────────────────
+  // Wrists actively flex, extend, and deviate to drive and follow the circular scrub:
+  // Flexion/extension (±4.5°), radial/ulnar deviation (±3.0°), and axial twist (±1.8°).
   const rWrist: [number, number, number] = [
-    s * 0.6 * orbitWeight,
-    c * 0.6 * orbitWeight,
-    0,
+    s * 4.5 * orbitWeight,
+    c * 3.0 * orbitWeight,
+    -s * 1.8 * orbitWeight,
   ];
   const lWrist: [number, number, number] = [
-    -s * 0.4 * orbitWeight,
-    -c * 0.4 * orbitWeight,
-    0,
+    -s * 3.0 * orbitWeight,
+    -c * 2.0 * orbitWeight,
+    s * 1.2 * orbitWeight,
   ];
 
+  // ─── 4. ANATOMICAL THUMB ARTICULATION & CONTACT COMPLIANCE ─────────────────
+  // Thumbs sit naturally along the radial contour of each hand:
+  // - Right Thumb: baseline spread=-3.5, curl=-2.5 (level with index MCP, no collapse into heel, no hitchhiker splaying).
+  //   Dynamic collision compliance: yields outward as right hand sweeps proximally across left thenar margin.
+  const rThumbCurl = -2.5 + c * 1.8 * orbitWeight - s * 0.8 * orbitWeight;
+  const rThumbSpread = -3.5 - s * 1.6 * orbitWeight + Math.max(0, -c) * 1.2 * orbitWeight;
+  const rThumbTwist = s * 1.2 * orbitWeight;
+
+  // - Left Thumb: baseline spread=-4.5, curl=-3.0 (relaxed opposing contour).
+  //   Dynamic collision compliance: flexes smoothly as the right hand slides across.
+  const lThumbCurl = -3.0 - c * 1.6 * orbitWeight + s * 0.8 * orbitWeight;
+  const lThumbSpread = -4.5 + s * 1.4 * orbitWeight + Math.max(0, c) * 1.0 * orbitWeight;
+  const lThumbTwist = -s * 1.2 * orbitWeight;
+
+  // ─── 5. FINGER SCRUBBING FRICTION & COMPLIANCE ─────────────────────────────
+  // Under soapy friction, fingers flex/extend with progressive phase delay across
+  // the metacarpal arch (index -> middle -> ring -> pinky), giving organic life.
   const fR: Record<FingerName, FingerArticulationTarget> = {
     thumb: {
-      curl: -1,
-      spread: 2,
-      twist: 0,
-      distalBias: 1.0,
+      curl: rThumbCurl,
+      spread: rThumbSpread,
+      twist: rThumbTwist,
+      distalBias: 1.10,
     },
     index: {
-      curl: -5.5 + Math.sin(theta) * 0.4 * orbitWeight,
-      spread: 0,
+      curl: -4.0 + c * 2.5 * orbitWeight,
+      spread: 0.10,
       twist: 0,
-      distalBias: 1.0,
+      distalBias: 1.10,
     },
     middle: {
-      curl: -5.5 + Math.sin(theta + 0.4) * 0.4 * orbitWeight,
-      spread: 0,
+      curl: -4.2 + Math.cos(theta - 0.20) * 2.4 * orbitWeight,
+      spread: 0.0,
       twist: 0,
-      distalBias: 1.0,
+      distalBias: 1.10,
     },
     ring: {
-      curl: -5.5 + Math.sin(theta + 0.8) * 0.4 * orbitWeight,
-      spread: 0,
+      curl: -3.8 + Math.cos(theta - 0.40) * 2.2 * orbitWeight,
+      spread: -0.10,
       twist: 0,
-      distalBias: 1.0,
+      distalBias: 1.10,
     },
     pinky: {
-      curl: -5.5 + Math.sin(theta + 1.2) * 0.4 * orbitWeight,
-      spread: 0,
+      curl: -3.0 + Math.cos(theta - 0.60) * 2.0 * orbitWeight,
+      spread: -0.25,
       twist: 0,
-      distalBias: 1.0,
+      distalBias: 1.12,
     },
   };
 
   const fL: Record<FingerName, FingerArticulationTarget> = {
     thumb: {
-      curl: -3,
-      spread: -3,
-      twist: 0,
-      distalBias: 1.0,
+      curl: lThumbCurl,
+      spread: lThumbSpread,
+      twist: lThumbTwist,
+      distalBias: 1.10,
     },
     index: {
-      curl: -5.5 - Math.sin(theta) * 0.4 * orbitWeight,
-      spread: 0,
+      curl: -4.0 - c * 2.0 * orbitWeight,
+      spread: 0.10,
       twist: 0,
-      distalBias: 1.0,
+      distalBias: 1.10,
     },
     middle: {
-      curl: -5.5 - Math.sin(theta + 0.4) * 0.4 * orbitWeight,
-      spread: 0,
+      curl: -4.2 - Math.cos(theta - 0.20) * 1.8 * orbitWeight,
+      spread: 0.0,
       twist: 0,
-      distalBias: 1.0,
+      distalBias: 1.10,
     },
     ring: {
-      curl: -5.5 - Math.sin(theta + 0.8) * 0.4 * orbitWeight,
-      spread: 0,
+      curl: -3.8 - Math.cos(theta - 0.40) * 1.6 * orbitWeight,
+      spread: -0.10,
       twist: 0,
-      distalBias: 1.0,
+      distalBias: 1.10,
     },
     pinky: {
-      curl: -5.5 - Math.sin(theta + 1.2) * 0.4 * orbitWeight,
-      spread: 0,
+      curl: -3.0 - Math.cos(theta - 0.60) * 1.4 * orbitWeight,
+      spread: -0.25,
       twist: 0,
-      distalBias: 1.0,
+      distalBias: 1.12,
     },
   };
 
@@ -390,17 +425,20 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
     rOff[1] += liftArc;
     lOff[1] += liftArc * 0.5;
 
+    const rWristApproach: [number, number, number] = [Math.sin(t * Math.PI) * 1.5, 0, 0];
+    const lWristApproach: [number, number, number] = [Math.sin(t * Math.PI) * 1.0, 0, 0];
+
     return {
       right: {
         palmOffset: rOff,
         palmEulerDeg: lerpVec3Tuple(SOAP_END_RIGHT_EULER, contactStart.right.palmEulerDeg, t),
-        wristEulerDeg: [0, 0, 0],
+        wristEulerDeg: rWristApproach,
         fingers: lerpFingerTargets(SOAP_END_RIGHT_FINGERS, contactStart.right.fingers, t),
       },
       left: {
         palmOffset: lOff,
         palmEulerDeg: lerpVec3Tuple(SOAP_END_LEFT_EULER, contactStart.left.palmEulerDeg, t),
-        wristEulerDeg: [0, 0, 0],
+        wristEulerDeg: lWristApproach,
         fingers: lerpFingerTargets(SOAP_END_LEFT_FINGERS, contactStart.left.fingers, t),
       },
       contactCenterHintOffset: [0.0, 0.015, -0.06],
@@ -412,7 +450,12 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
   if (p <= 0.84) {
     const rubNorm = (p - 0.16) / (0.84 - 0.16);
     const totalCycles = 6.0;
-    const theta = rubNorm * totalCycles * Math.PI * 2;
+
+    // Natural cadence: slight acceleration through power stroke
+    const rawTheta = rubNorm * totalCycles * Math.PI * 2;
+    const cadenceAdjust = Math.sin(rawTheta) * 0.12;
+    const theta = rawTheta - cadenceAdjust;
+
     const rampIn = smooth01((p - 0.16) / 0.05);
     const rampOut = smooth01((0.84 - p) / 0.05);
     const orbitWeight = rampIn * rampOut;
@@ -432,28 +475,28 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
   // Substage F (0.84 -> 1.00): 6. Hasil Setelah Digosok
   // Stop circular rubbing, gently open palms forward/upward showing full lather
   const u = THREE.MathUtils.clamp((p - 0.84) / 0.16, 0, 1);
-  const tPos = smooth01(1 - Math.pow(1 - u, 2.2));
-  const tRot = smooth01(Math.pow(u, 1.5));
+  const tPos = smooth01(1 - Math.pow(1 - u, 2.0));
+  const tRot = smooth01(Math.pow(u, 1.4));
   const holdT = THREE.MathUtils.clamp((p - 0.92) / 0.08, 0, 1);
   const contactEnd = evaluatePalmContactOrbit(6.0 * Math.PI * 2, 0);
 
   const rOff = lerpVec3Tuple(contactEnd.right.palmOffset, SUB_F_RIGHT_OFF, tPos);
   const lOff = lerpVec3Tuple(contactEnd.left.palmOffset, SUB_F_LEFT_OFF, tPos);
 
-  const holdBreath = Math.sin(holdT * Math.PI) * 1.0;
+  const holdBreath = Math.sin(holdT * Math.PI) * 0.8;
   const finalRightFingers: Record<FingerName, FingerArticulationTarget> = {
-    thumb: { ...SUB_F_FINGERS.thumb, curl: SUB_F_FINGERS.thumb.curl + holdBreath * 0.3 },
-    index: { ...SUB_F_FINGERS.index, curl: SUB_F_FINGERS.index.curl + holdBreath * 0.5 },
-    middle: { ...SUB_F_FINGERS.middle, curl: SUB_F_FINGERS.middle.curl + holdBreath * 0.5 },
-    ring: { ...SUB_F_FINGERS.ring, curl: SUB_F_FINGERS.ring.curl + holdBreath * 0.4 },
-    pinky: { ...SUB_F_FINGERS.pinky, curl: SUB_F_FINGERS.pinky.curl + holdBreath * 0.4 },
+    thumb: { ...SUB_F_FINGERS.thumb, curl: SUB_F_FINGERS.thumb.curl + holdBreath * 0.25 },
+    index: { ...SUB_F_FINGERS.index, curl: SUB_F_FINGERS.index.curl + holdBreath * 0.4 },
+    middle: { ...SUB_F_FINGERS.middle, curl: SUB_F_FINGERS.middle.curl + holdBreath * 0.4 },
+    ring: { ...SUB_F_FINGERS.ring, curl: SUB_F_FINGERS.ring.curl + holdBreath * 0.35 },
+    pinky: { ...SUB_F_FINGERS.pinky, curl: SUB_F_FINGERS.pinky.curl + holdBreath * 0.35 },
   };
   const finalLeftFingers: Record<FingerName, FingerArticulationTarget> = {
-    thumb: { ...SUB_F_FINGERS.thumb, curl: SUB_F_FINGERS.thumb.curl - holdBreath * 0.3 },
-    index: { ...SUB_F_FINGERS.index, curl: SUB_F_FINGERS.index.curl - holdBreath * 0.5 },
-    middle: { ...SUB_F_FINGERS.middle, curl: SUB_F_FINGERS.middle.curl - holdBreath * 0.5 },
-    ring: { ...SUB_F_FINGERS.ring, curl: SUB_F_FINGERS.ring.curl - holdBreath * 0.4 },
-    pinky: { ...SUB_F_FINGERS.pinky, curl: SUB_F_FINGERS.pinky.curl - holdBreath * 0.4 },
+    thumb: { ...SUB_F_FINGERS.thumb, curl: SUB_F_FINGERS.thumb.curl - holdBreath * 0.25 },
+    index: { ...SUB_F_FINGERS.index, curl: SUB_F_FINGERS.index.curl - holdBreath * 0.4 },
+    middle: { ...SUB_F_FINGERS.middle, curl: SUB_F_FINGERS.middle.curl - holdBreath * 0.4 },
+    ring: { ...SUB_F_FINGERS.ring, curl: SUB_F_FINGERS.ring.curl - holdBreath * 0.35 },
+    pinky: { ...SUB_F_FINGERS.pinky, curl: SUB_F_FINGERS.pinky.curl - holdBreath * 0.35 },
   };
 
   return {
@@ -462,7 +505,7 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
       palmEulerDeg: lerpVec3Tuple(contactEnd.right.palmEulerDeg, SUB_F_RIGHT_EULER, tRot),
       wristEulerDeg: lerpVec3Tuple(
         contactEnd.right.wristEulerDeg,
-        [2 * Math.sin(holdT * Math.PI), 0, 0],
+        [1.8 * Math.sin(holdT * Math.PI), 0, 0],
         tRot,
       ),
       fingers: lerpFingerTargets(contactEnd.right.fingers, finalRightFingers, tRot),
@@ -472,7 +515,7 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
       palmEulerDeg: lerpVec3Tuple(contactEnd.left.palmEulerDeg, SUB_F_LEFT_EULER, tRot),
       wristEulerDeg: lerpVec3Tuple(
         contactEnd.left.wristEulerDeg,
-        [2 * Math.sin(holdT * Math.PI + 0.5), 0, 0],
+        [1.8 * Math.sin(holdT * Math.PI + 0.5), 0, 0],
         tRot,
       ),
       fingers: lerpFingerTargets(contactEnd.left.fingers, finalLeftFingers, tRot),
@@ -480,7 +523,6 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
     contactCenterHintOffset: [0.0, 0.015, -0.06],
   };
 }
-
 /**
  * Finger articulation tuning (degrees, relative to the calibrated rest pose).
  * Verified against `washand.glb`: 1 deg of `curl` moves a fingertip ~3.9 scene-mm along
