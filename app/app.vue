@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { useGLTF } from '@tresjs/cientos'
 import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
+import HandTuningPanel from '~/components/handwashing/HandTuningPanel.vue'
 
 const { state: model, isLoading } = useGLTF('models/washand.glb')
 const controller = new HandwashingSequenceController()
@@ -277,6 +278,9 @@ onUnmounted(() => {
       <primitive v-if="model?.scene" :object="model.scene" />
       <HandwashingWaterSystem :controller="controller" />
     </TresCanvas>
+
+    <!-- Live Interactive Tuning Tool -->
+    <HandTuningPanel v-if="!isLoading" :controller="controller" />
 
     <!-- Minimal stage & playback overlay controls -->
     <div

@@ -216,8 +216,8 @@ export class HandAnimationController {
         let spreadWeight: number;
 
         if (fingerName === "thumb") {
-          flexWeight = i === 0 ? 0.25 : i === 1 ? 0.65 * distalBias : 0.55 * distalBias;
-          spreadWeight = i === 0 ? 0.8 : i === 1 ? 0.3 : 0.0;
+          flexWeight = i === 0 ? 0.65 : i === 1 ? 0.85 * distalBias : 0.65 * distalBias;
+          spreadWeight = i === 0 ? 0.9 : i === 1 ? 0.5 : 0.2;
         } else {
           // i=0 is the 1.24-unit-long metacarpal inside the palm: keep it stable
           // (zero spread, minimal flex) so the palm and knuckles never stretch apart.
@@ -234,9 +234,24 @@ export class HandAnimationController {
           spreadWeight = i === 1 ? 1.0 : 0.0;
         }
 
-        const curlRad = fingerTarget.curl * flexWeight * DEG2RAD * hand.curlSign;
-        const spreadRad = fingerTarget.spread * spreadWeight * DEG2RAD * hand.spreadSign;
-        const twistRad = (fingerTarget.twist ?? 0) * (i === 1 ? 0.5 : 0.0) * DEG2RAD * hand.curlSign;
+        const curlDeg =
+          fingerTarget.jointCurls && fingerTarget.jointCurls[i] !== undefined
+            ? fingerTarget.jointCurls[i]!
+            : fingerTarget.curl * flexWeight;
+        const spreadDeg =
+          fingerTarget.jointSpreads && fingerTarget.jointSpreads[i] !== undefined
+            ? fingerTarget.jointSpreads[i]!
+            : fingerTarget.spread * spreadWeight;
+        const twistDeg =
+          fingerTarget.jointTwists && fingerTarget.jointTwists[i] !== undefined
+            ? fingerTarget.jointTwists[i]!
+            : fingerName === "thumb"
+              ? (fingerTarget.twist ?? 0) * (i === 0 ? 0.75 : i === 1 ? 0.85 : 0.5)
+              : (fingerTarget.twist ?? 0) * (i === 1 ? 0.5 : 0.0);
+
+        const curlRad = curlDeg * DEG2RAD * hand.curlSign;
+        const spreadRad = spreadDeg * DEG2RAD * hand.spreadSign;
+        const twistRad = twistDeg * DEG2RAD;
 
         scratchEuler.set(curlRad, twistRad, spreadRad, "XYZ");
         scratchDeltaQuat.setFromEuler(scratchEuler);

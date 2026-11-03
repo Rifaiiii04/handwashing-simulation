@@ -171,6 +171,10 @@ export class HandwashingSequenceController {
     this.state.loop = loop;
   }
 
+  markPoseDirty(): void {
+    this.stagePoseDirty = true;
+  }
+
   /**
    * Resets all timers, pump state, soap drop, foam intensity, particle emission,
    * faucet state, and restores both hands to their verified rest transforms.

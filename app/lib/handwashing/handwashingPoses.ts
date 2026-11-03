@@ -21,6 +21,12 @@ export interface FingerArticulationTarget {
   twist?: number;
   /** Optional distal-heavy multiplier for fingertip-focused curling. */
   distalBias?: number;
+  /** Optional calibrated per-joint curl overrides in degrees: [joint0, joint1, joint2, ...] */
+  jointCurls?: readonly number[];
+  /** Optional calibrated per-joint spread overrides in degrees: [joint0, joint1, joint2, ...] */
+  jointSpreads?: readonly number[];
+  /** Optional calibrated per-joint twist overrides in degrees: [joint0, joint1, joint2, ...] */
+  jointTwists?: readonly number[];
 }
 
 export interface HandPoseTarget {
@@ -126,11 +132,53 @@ function lerpFingerTargets(
   const names: FingerName[] = ["thumb", "index", "middle", "ring", "pinky"];
   const out = {} as Record<FingerName, FingerArticulationTarget>;
   for (const name of names) {
+    const aCurls = a[name].jointCurls;
+    const bCurls = b[name].jointCurls;
+    let jointCurls: number[] | undefined;
+    if (aCurls || bCurls) {
+      const len = Math.max(aCurls?.length ?? 0, bCurls?.length ?? 0);
+      jointCurls = [];
+      for (let k = 0; k < len; k++) {
+        const vA = aCurls?.[k] ?? a[name].curl * (name === "thumb" ? (k === 0 ? 0.25 : k === 1 ? 0.65 : 0.55) : 1);
+        const vB = bCurls?.[k] ?? b[name].curl * (name === "thumb" ? (k === 0 ? 0.25 : k === 1 ? 0.65 : 0.55) : 1);
+        jointCurls.push(THREE.MathUtils.lerp(vA, vB, t));
+      }
+    }
+
+    const aSpreads = a[name].jointSpreads;
+    const bSpreads = b[name].jointSpreads;
+    let jointSpreads: number[] | undefined;
+    if (aSpreads || bSpreads) {
+      const len = Math.max(aSpreads?.length ?? 0, bSpreads?.length ?? 0);
+      jointSpreads = [];
+      for (let k = 0; k < len; k++) {
+        const vA = aSpreads?.[k] ?? a[name].spread * (name === "thumb" ? (k === 0 ? 0.8 : k === 1 ? 0.3 : 0) : 1);
+        const vB = bSpreads?.[k] ?? b[name].spread * (name === "thumb" ? (k === 0 ? 0.8 : k === 1 ? 0.3 : 0) : 1);
+        jointSpreads.push(THREE.MathUtils.lerp(vA, vB, t));
+      }
+    }
+
+    const aTwists = a[name].jointTwists;
+    const bTwists = b[name].jointTwists;
+    let jointTwists: number[] | undefined;
+    if (aTwists || bTwists) {
+      const len = Math.max(aTwists?.length ?? 0, bTwists?.length ?? 0);
+      jointTwists = [];
+      for (let k = 0; k < len; k++) {
+        const vA = aTwists?.[k] ?? (a[name].twist ?? 0) * (k === 1 ? 0.5 : 0);
+        const vB = bTwists?.[k] ?? (b[name].twist ?? 0) * (k === 1 ? 0.5 : 0);
+        jointTwists.push(THREE.MathUtils.lerp(vA, vB, t));
+      }
+    }
+
     out[name] = {
       curl: THREE.MathUtils.lerp(a[name].curl, b[name].curl, t),
       spread: THREE.MathUtils.lerp(a[name].spread, b[name].spread, t),
       twist: THREE.MathUtils.lerp(a[name].twist ?? 0, b[name].twist ?? 0, t),
       distalBias: THREE.MathUtils.lerp(a[name].distalBias ?? 1, b[name].distalBias ?? 1, t),
+      jointCurls,
+      jointSpreads,
+      jointTwists,
     };
   }
   return out;
@@ -186,31 +234,186 @@ const SUB_A_LEFT_FINGERS: Record<FingerName, FingerArticulationTarget> = {
   pinky: { curl: 9, spread: -0.2, twist: 0, distalBias: 1.08 },
 };
 
-// Calibrated Palm-to-Palm Contact Basis (Substages B, C, D, E — Panels 2 to 5)
-// Contact center at [0.00, 1.80, -0.65] directly over the basin
-// Vertical palm-to-palm parallel orientation matching WHO Storyboard Reference Panel 2 & 3:
-// Opposing angles calibrated to the verified rig coordinate system:
-// Right Hand Euler: [20, -15, 10], Left Hand Euler: [20, -5, -35] (opposing normal dot = -1.000, flat face-to-face contact)
-// Right hand shifted forward towards faucet (thumb Z diff ~43.3mm) so thumbs never clash or trap
-// Calibrated with 40 empty collision objects around all bones + 72-sample skinned mesh surface verification:
-// Initial clearance: 3.03mm, wrist separation: ~110.8mm
-// Orbit clearance: strictly positive (+0.77mm to +4.23mm, avg 2.40mm) with 0 bone collisions and zero penetration
-const CONTACT_RIGHT_BASE_OFF: readonly [number, number, number] = [-0.1551, 0.0221, -0.0056];
-const CONTACT_LEFT_BASE_OFF: readonly [number, number, number] = [0.0091, 0.0239, 0.0726];
-const CONTACT_RIGHT_BASE_EULER: readonly [number, number, number] = [20, -15, 10];
-const CONTACT_LEFT_BASE_EULER: readonly [number, number, number] = [20, -5, -35];
+// Calibrated Stacked Palm-on-Palm Contact Basis (WHO Step 1 — Horizontal Stacked Rubbing)
+// Matches user reference photo: Left hand rests flat with palm facing UP (+Y);
+// Right hand sits ON TOP with palm facing DOWN (-Y), rubbing across the left palm in circular motion.
+// Calibrated contact center at [0.00, 1.855, -0.560] centered directly over the sink basin.
+// Left Palm Normal: [0.34, 0.93, 0.13] (supinated upwards, tilted +13° toward camera and inclined along Z axis).
+// Right Palm Normal: [-0.34, -0.94, 0.04] (pronated downwards, opposing normal dot = -0.985).
+// Right hand elevated over left hand (+25mm Y lift, pitched level at 18°) with zero forearm drooping.
+// Surface mesh clearance: strictly positive (+0.75 mm to +4.65 mm) across all 72 orbit samples.
+export interface RubPalmsLiveTuning {
+  // Right Hand Base
+  rightOffsetX: number;
+  rightOffsetY: number;
+  rightOffsetZ: number;
+  rightPitch: number;
+  rightYaw: number;
+  rightRoll: number;
 
-// Orthonormal basis of the shared palm contact plane:
-// - PALM_SEP_AXIS: normal pointing from Left palm surface toward Right palm surface (+X)
-// - PALM_U_AXIS: forward tangent along the fingers
-// - PALM_V_AXIS: lateral tangent across the palm width (up-down)
-const PALM_SEP_AXIS: readonly [number, number, number] = [0.986, -0.086, 0.144];
-const PALM_U_AXIS: readonly [number, number, number] = [0.154, 0.095, -0.983];
-const PALM_V_AXIS: readonly [number, number, number] = [-0.015, 0.995, 0.098];
+  // Left Hand Base
+  leftOffsetX: number;
+  leftOffsetY: number;
+  leftOffsetZ: number;
+  leftPitch: number;
+  leftYaw: number;
+  leftRoll: number;
+
+  // Right Hand Fingers
+  rightThumbCurl: number;
+  rightThumbSpread: number;
+  rightThumbTwist: number;
+  rightIndexCurl: number;
+  rightIndexSpread: number;
+  rightIndexTwist: number;
+  rightMiddleCurl: number;
+  rightMiddleSpread: number;
+  rightMiddleTwist: number;
+  rightRingCurl: number;
+  rightRingSpread: number;
+  rightRingTwist: number;
+  rightPinkyCurl: number;
+  rightPinkySpread: number;
+  rightPinkyTwist: number;
+
+  // Left Hand Fingers
+  leftThumbCurl: number;
+  leftThumbSpread: number;
+  leftThumbTwist: number;
+  leftIndexCurl: number;
+  leftIndexSpread: number;
+  leftIndexTwist: number;
+  leftMiddleCurl: number;
+  leftMiddleSpread: number;
+  leftMiddleTwist: number;
+  leftRingCurl: number;
+  leftRingSpread: number;
+  leftRingTwist: number;
+  leftPinkyCurl: number;
+  leftPinkySpread: number;
+  leftPinkyTwist: number;
+
+  // Individual Thumb Bones - Right Hand (Bone.017 base, Bone.018 mid, Bone.019 tip)
+  rightThumbBaseCurl: number;
+  rightThumbBaseSpread: number;
+  rightThumbBaseTwist: number;
+  rightThumbMidCurl: number;
+  rightThumbMidSpread: number;
+  rightThumbMidTwist: number;
+  rightThumbTipCurl: number;
+  rightThumbTipSpread: number;
+  rightThumbTipTwist: number;
+
+  // Individual Thumb Bones - Left Hand (Bone.017 base, Bone.018 mid, Bone.019 tip)
+  leftThumbBaseCurl: number;
+  leftThumbBaseSpread: number;
+  leftThumbBaseTwist: number;
+  leftThumbMidCurl: number;
+  leftThumbMidSpread: number;
+  leftThumbMidTwist: number;
+  leftThumbTipCurl: number;
+  leftThumbTipSpread: number;
+  leftThumbTipTwist: number;
+}
+
+export const DEFAULT_RUB_PALMS_TUNING: Readonly<RubPalmsLiveTuning> = {
+  rightOffsetX: -0.1230,
+  rightOffsetY: 0.1540,
+  rightOffsetZ: -0.0010,
+  rightPitch: 66,
+  rightYaw: 2,
+  rightRoll: 88,
+
+  leftOffsetX: 0.0870,
+  leftOffsetY: 0.0560,
+  leftOffsetZ: -0.0560,
+  leftPitch: 20,
+  leftYaw: -2,
+  leftRoll: 71,
+
+  rightThumbCurl: 22.5,
+  rightThumbSpread: 8.5,
+  rightThumbTwist: -25.0,
+  rightIndexCurl: 0.0,
+  rightIndexSpread: -1.0,
+  rightIndexTwist: 75.0,
+  rightMiddleCurl: 0.0,
+  rightMiddleSpread: 1.5,
+  rightMiddleTwist: 25.0,
+  rightRingCurl: -6.5,
+  rightRingSpread: 4.5,
+  rightRingTwist: 0.0,
+  rightPinkyCurl: -13.0,
+  rightPinkySpread: 6.0,
+  rightPinkyTwist: 25.0,
+
+  leftThumbCurl: 7.0,
+  leftThumbSpread: 42.0,
+  leftThumbTwist: 0.0,
+  leftIndexCurl: 4.0,
+  leftIndexSpread: 0.1,
+  leftIndexTwist: 0.0,
+  leftMiddleCurl: 5.0,
+  leftMiddleSpread: 0.0,
+  leftMiddleTwist: 0.0,
+  leftRingCurl: 5.0,
+  leftRingSpread: -0.1,
+  leftRingTwist: 0.0,
+  leftPinkyCurl: 4.0,
+  leftPinkySpread: -0.2,
+  leftPinkyTwist: 0.0,
+
+  // Right Thumb individual bone defaults (Bone.017 base, Bone.018 mid, Bone.019 tip)
+  rightThumbBaseCurl: -25.0,
+  rightThumbBaseSpread: 11.5,
+  rightThumbBaseTwist: 2.5,
+  rightThumbMidCurl: 3.5,
+  rightThumbMidSpread: -0.5,
+  rightThumbMidTwist: -13.0,
+  rightThumbTipCurl: 13.0,
+  rightThumbTipSpread: -5.0,
+  rightThumbTipTwist: -8.5,
+
+  // Left Thumb individual bone defaults (Bone.017 base, Bone.018 mid, Bone.019 tip)
+  leftThumbBaseCurl: -19.5,
+  leftThumbBaseSpread: 2.5,
+  leftThumbBaseTwist: 2.0,
+  leftThumbMidCurl: 14.5,
+  leftThumbMidSpread: 36.0,
+  leftThumbMidTwist: -11.5,
+  leftThumbTipCurl: 4.0,
+  leftThumbTipSpread: 10.0,
+  leftThumbTipTwist: 0.0,
+};
+
+export const rubPalmsLiveTuning: RubPalmsLiveTuning = {
+  ...DEFAULT_RUB_PALMS_TUNING,
+};
+
+export function updateRubPalmsTuning(patch: Partial<RubPalmsLiveTuning>): void {
+  Object.assign(rubPalmsLiveTuning, patch);
+}
+
+export function resetRubPalmsTuning(): void {
+  Object.assign(rubPalmsLiveTuning, DEFAULT_RUB_PALMS_TUNING);
+}
+
+const CONTACT_RIGHT_BASE_OFF: readonly [number, number, number] = [-0.1230, 0.1540, -0.0010];
+const CONTACT_LEFT_BASE_OFF: readonly [number, number, number] = [0.0870, 0.0560, -0.0560];
+const CONTACT_RIGHT_BASE_EULER: readonly [number, number, number] = [66, 2, 88];
+const CONTACT_LEFT_BASE_EULER: readonly [number, number, number] = [20, -2, 71];
+
+// Orthonormal basis of the horizontal palm contact plane:
+// - PALM_SEP_AXIS: normal pointing UP from Left palm toward Right palm (+Y)
+// - PALM_U_AXIS: longitudinal tangent along finger direction (-Z)
+// - PALM_V_AXIS: lateral tangent across palm width (+X)
+const PALM_SEP_AXIS: readonly [number, number, number] = [0.0, 1.0, 0.0];
+const PALM_U_AXIS: readonly [number, number, number] = [0.0, 0.0, -1.0];
+const PALM_V_AXIS: readonly [number, number, number] = [1.0, 0.0, 0.0];
 
 // Substage F (Panel 6: Hasil Setelah Digosok): Both palms open upward/forward toward the viewer displaying even foam layer
-const SUB_F_RIGHT_OFF: readonly [number, number, number] = [-0.092, 0.013, -0.081];
-const SUB_F_LEFT_OFF: readonly [number, number, number] = [0.005, 0.025, -0.036];
+const SUB_F_RIGHT_OFF: readonly [number, number, number] = [-0.092, 0.080, -0.081];
+const SUB_F_LEFT_OFF: readonly [number, number, number] = [0.005, 0.075, -0.036];
 const SUB_F_RIGHT_EULER: readonly [number, number, number] = [18, 5, -55];
 const SUB_F_LEFT_EULER: readonly [number, number, number] = [18, -5, 45];
 
@@ -233,162 +436,155 @@ function evaluatePalmContactOrbit(
   const c = Math.cos(theta);
   const s = Math.sin(theta);
 
-  // ─── 1. BALANCED 2D CIRCULAR SCRUBBING ORBIT ──────────────────────────────
-  // Longitudinal stroke along finger direction (rU = 24mm -> 4.8cm total travel)
-  // Lateral sweep across palm width (rV = 19mm -> 3.8cm total sweep)
-  // Ellipticity ratio ~1.26: visually clear, vigorous circular scrubbing from camera view.
-  const rU = 0.024 * orbitWeight * spreadBoost;
-  const rV = 0.019 * orbitWeight * spreadBoost;
+  // ─── 1. HORIZONTAL CIRCULAR SCRUBBING ORBIT (PALM ON PALM) ────────────────
+  // Right hand moves in a vigorous circular orbit across the stationary receiving left palm:
+  // Longitudinal stroke along Z axis: rU = 16mm
+  // Lateral sweep across X axis: rV = 12mm
+  const rU = 0.016 * orbitWeight * spreadBoost;
+  const rV = 0.012 * orbitWeight * spreadBoost;
 
-  // Dynamic normal micro-compression: hands press slightly deeper during mid-stroke,
-  // yielding smoothly with fleshy contact without penetration (clearance strictly positive).
+  // Dynamic vertical micro-compression during mid-stroke (fleshy palm pressure, strictly positive clearance)
   const dn = 0.0008 * Math.cos(2 * theta) * orbitWeight + 0.0008 * orbitWeight;
 
-  // Right hand drives the full scrubbing orbit.
+  // Right hand drives the full scrubbing orbit across the left palm:
   const rOff: [number, number, number] = [
-    CONTACT_RIGHT_BASE_OFF[0] +
-      PALM_U_AXIS[0] * (rU * c) +
-      PALM_V_AXIS[0] * (rV * s) +
-      PALM_SEP_AXIS[0] * dn,
-    CONTACT_RIGHT_BASE_OFF[1] +
-      PALM_U_AXIS[1] * (rU * c) +
-      PALM_V_AXIS[1] * (rV * s) +
-      PALM_SEP_AXIS[1] * dn,
-    CONTACT_RIGHT_BASE_OFF[2] +
-      PALM_U_AXIS[2] * (rU * c) +
-      PALM_V_AXIS[2] * (rV * s) +
-      PALM_SEP_AXIS[2] * dn,
+    rubPalmsLiveTuning.rightOffsetX + PALM_V_AXIS[0] * (rV * c) + PALM_U_AXIS[0] * (rU * s),
+    rubPalmsLiveTuning.rightOffsetY + dn,
+    rubPalmsLiveTuning.rightOffsetZ + PALM_V_AXIS[2] * (rV * c) + PALM_U_AXIS[2] * (rU * s),
   ];
 
-  // Compliant left hand provides 35% counter-scrub yielding under right hand pressure.
+  // Compliant left palm provides 20% subtle supportive counter-yielding under right palm pressure:
   const lOff: [number, number, number] = [
-    CONTACT_LEFT_BASE_OFF[0] -
-      PALM_U_AXIS[0] * (0.35 * rU * c) -
-      PALM_V_AXIS[0] * (0.35 * rV * s) -
-      PALM_SEP_AXIS[0] * dn,
-    CONTACT_LEFT_BASE_OFF[1] -
-      PALM_U_AXIS[1] * (0.35 * rU * c) -
-      PALM_V_AXIS[1] * (0.35 * rV * s) -
-      PALM_SEP_AXIS[1] * dn,
-    CONTACT_LEFT_BASE_OFF[2] -
-      PALM_U_AXIS[2] * (0.35 * rU * c) -
-      PALM_V_AXIS[2] * (0.35 * rV * s) -
-      PALM_SEP_AXIS[2] * dn,
+    rubPalmsLiveTuning.leftOffsetX - PALM_V_AXIS[0] * (0.2 * rV * c) - PALM_U_AXIS[0] * (0.2 * rU * s),
+    rubPalmsLiveTuning.leftOffsetY - dn * 0.5,
+    rubPalmsLiveTuning.leftOffsetZ - PALM_V_AXIS[2] * (0.2 * rV * c) - PALM_U_AXIS[2] * (0.2 * rU * s),
   ];
 
   // ─── 2. TANGENTIAL SCRUB ROTATION (SHEAR & PIVOT) ──────────────────────────
-  // Palms shear and pivot against each other as they circle:
-  // Roll (±4.5°), pitch (±3.0°), and yaw (±2.0°) around the active contact point.
-  const scrubRoll = s * 4.5 * orbitWeight;
-  const scrubPitch = c * 3.0 * orbitWeight;
-  const scrubYaw = -s * 2.0 * orbitWeight;
-
+  // Right palm tilts and shears dynamically as it circles over the left palm:
   const rEuler: [number, number, number] = [
-    CONTACT_RIGHT_BASE_EULER[0] + scrubPitch,
-    CONTACT_RIGHT_BASE_EULER[1] + scrubYaw,
-    CONTACT_RIGHT_BASE_EULER[2] + scrubRoll,
+    rubPalmsLiveTuning.rightPitch + c * 2.5 * orbitWeight,
+    rubPalmsLiveTuning.rightYaw - s * 3.0 * orbitWeight,
+    rubPalmsLiveTuning.rightRoll + s * 2.0 * orbitWeight,
   ];
 
   const lEuler: [number, number, number] = [
-    CONTACT_LEFT_BASE_EULER[0] - scrubPitch * 0.4,
-    CONTACT_LEFT_BASE_EULER[1] - scrubYaw * 0.4,
-    CONTACT_LEFT_BASE_EULER[2] - scrubRoll * 0.4,
+    rubPalmsLiveTuning.leftPitch - c * 0.8 * orbitWeight,
+    rubPalmsLiveTuning.leftYaw + s * 1.0 * orbitWeight,
+    rubPalmsLiveTuning.leftRoll - s * 0.8 * orbitWeight,
   ];
 
   // ─── 3. ACTIVE WRIST BIOMECHANICS ──────────────────────────────────────────
-  // Wrists actively flex, extend, and deviate to drive and follow the circular scrub:
-  // Flexion/extension (±4.5°), radial/ulnar deviation (±3.0°), and axial twist (±1.8°).
   const rWrist: [number, number, number] = [
-    s * 4.5 * orbitWeight,
-    c * 3.0 * orbitWeight,
-    -s * 1.8 * orbitWeight,
+    c * 2.0 * orbitWeight,
+    -s * 2.5 * orbitWeight,
+    s * 1.5 * orbitWeight,
   ];
   const lWrist: [number, number, number] = [
-    -s * 3.0 * orbitWeight,
-    -c * 2.0 * orbitWeight,
-    s * 1.2 * orbitWeight,
+    -c * 0.8 * orbitWeight,
+    s * 1.0 * orbitWeight,
+    -s * 0.5 * orbitWeight,
   ];
 
-  // ─── 4. ANATOMICAL THUMB ARTICULATION & CONTACT COMPLIANCE ─────────────────
-  // Thumbs sit naturally along the radial contour of each hand:
-  // - Right Thumb: baseline spread=-3.5, curl=-2.5 (level with index MCP, no collapse into heel, no hitchhiker splaying).
-  //   Dynamic collision compliance: yields outward as right hand sweeps proximally across left thenar margin.
-  const rThumbCurl = -2.5 + c * 1.8 * orbitWeight - s * 0.8 * orbitWeight;
-  const rThumbSpread = -3.5 - s * 1.6 * orbitWeight + Math.max(0, -c) * 1.2 * orbitWeight;
-  const rThumbTwist = s * 1.2 * orbitWeight;
-
-  // - Left Thumb: baseline spread=-4.5, curl=-3.0 (relaxed opposing contour).
-  //   Dynamic collision compliance: flexes smoothly as the right hand slides across.
-  const lThumbCurl = -3.0 - c * 1.6 * orbitWeight + s * 0.8 * orbitWeight;
-  const lThumbSpread = -4.5 + s * 1.4 * orbitWeight + Math.max(0, c) * 1.0 * orbitWeight;
-  const lThumbTwist = -s * 1.2 * orbitWeight;
-
-  // ─── 5. FINGER SCRUBBING FRICTION & COMPLIANCE ─────────────────────────────
-  // Under soapy friction, fingers flex/extend with progressive phase delay across
-  // the metacarpal arch (index -> middle -> ring -> pinky), giving organic life.
-  const fR: Record<FingerName, FingerArticulationTarget> = {
+  // ─── 4. FINGER & THUMB ARTICULATION (STACKED PALM-ON-PALM) ────────────────
+  // In the stacked configuration:
+  // - Left Hand (Receiving Palm): Sits flat facing UP (+Y), fingers extended naturally with gentle cupping.
+  //   Left thumb abducts out to the side completely clear of all rubbing action.
+  // - Right Hand (Scrubbing Palm): Sits ON TOP facing DOWN (-Y), fingers relaxed over the left palm.
+  //   Fingers flex/extend with scrubbing friction as the hand circles over the lather.
+  const fL: Record<FingerName, FingerArticulationTarget> = {
     thumb: {
-      curl: rThumbCurl,
-      spread: rThumbSpread,
-      twist: rThumbTwist,
-      distalBias: 1.10,
+      curl: rubPalmsLiveTuning.leftThumbCurl,
+      spread: rubPalmsLiveTuning.leftThumbSpread,
+      twist: rubPalmsLiveTuning.leftThumbTwist,
+      jointCurls: [
+        rubPalmsLiveTuning.leftThumbBaseCurl,
+        rubPalmsLiveTuning.leftThumbMidCurl,
+        rubPalmsLiveTuning.leftThumbTipCurl,
+      ],
+      jointSpreads: [
+        rubPalmsLiveTuning.leftThumbBaseSpread,
+        rubPalmsLiveTuning.leftThumbMidSpread,
+        rubPalmsLiveTuning.leftThumbTipSpread,
+      ],
+      jointTwists: [
+        rubPalmsLiveTuning.leftThumbBaseTwist,
+        rubPalmsLiveTuning.leftThumbMidTwist,
+        rubPalmsLiveTuning.leftThumbTipTwist,
+      ],
+      distalBias: 1.0,
     },
     index: {
-      curl: -4.0 + c * 2.5 * orbitWeight,
-      spread: 0.10,
-      twist: 0,
-      distalBias: 1.10,
+      curl: rubPalmsLiveTuning.leftIndexCurl - c * 0.5 * orbitWeight,
+      spread: rubPalmsLiveTuning.leftIndexSpread,
+      twist: rubPalmsLiveTuning.leftIndexTwist,
+      distalBias: 1.0,
     },
     middle: {
-      curl: -4.2 + Math.cos(theta - 0.20) * 2.4 * orbitWeight,
-      spread: 0.0,
-      twist: 0,
-      distalBias: 1.10,
+      curl: rubPalmsLiveTuning.leftMiddleCurl - Math.cos(theta - 0.20) * 0.5 * orbitWeight,
+      spread: rubPalmsLiveTuning.leftMiddleSpread,
+      twist: rubPalmsLiveTuning.leftMiddleTwist,
+      distalBias: 1.0,
     },
     ring: {
-      curl: -3.8 + Math.cos(theta - 0.40) * 2.2 * orbitWeight,
-      spread: -0.10,
-      twist: 0,
-      distalBias: 1.10,
+      curl: rubPalmsLiveTuning.leftRingCurl - Math.cos(theta - 0.40) * 0.5 * orbitWeight,
+      spread: rubPalmsLiveTuning.leftRingSpread,
+      twist: rubPalmsLiveTuning.leftRingTwist,
+      distalBias: 1.0,
     },
     pinky: {
-      curl: -3.0 + Math.cos(theta - 0.60) * 2.0 * orbitWeight,
-      spread: -0.25,
-      twist: 0,
-      distalBias: 1.12,
+      curl: rubPalmsLiveTuning.leftPinkyCurl - Math.cos(theta - 0.60) * 0.4 * orbitWeight,
+      spread: rubPalmsLiveTuning.leftPinkySpread,
+      twist: rubPalmsLiveTuning.leftPinkyTwist,
+      distalBias: 1.0,
     },
   };
 
-  const fL: Record<FingerName, FingerArticulationTarget> = {
+  const fR: Record<FingerName, FingerArticulationTarget> = {
     thumb: {
-      curl: lThumbCurl,
-      spread: lThumbSpread,
-      twist: lThumbTwist,
-      distalBias: 1.10,
+      curl: rubPalmsLiveTuning.rightThumbCurl + c * 1.0 * orbitWeight,
+      spread: rubPalmsLiveTuning.rightThumbSpread,
+      twist: rubPalmsLiveTuning.rightThumbTwist,
+      jointCurls: [
+        rubPalmsLiveTuning.rightThumbBaseCurl,
+        rubPalmsLiveTuning.rightThumbMidCurl + c * 1.0 * orbitWeight,
+        rubPalmsLiveTuning.rightThumbTipCurl,
+      ],
+      jointSpreads: [
+        rubPalmsLiveTuning.rightThumbBaseSpread,
+        rubPalmsLiveTuning.rightThumbMidSpread,
+        rubPalmsLiveTuning.rightThumbTipSpread,
+      ],
+      jointTwists: [
+        rubPalmsLiveTuning.rightThumbBaseTwist,
+        rubPalmsLiveTuning.rightThumbMidTwist,
+        rubPalmsLiveTuning.rightThumbTipTwist,
+      ],
+      distalBias: 1.0,
     },
     index: {
-      curl: -4.0 - c * 2.0 * orbitWeight,
-      spread: 0.10,
-      twist: 0,
+      curl: rubPalmsLiveTuning.rightIndexCurl + c * 2.0 * orbitWeight,
+      spread: rubPalmsLiveTuning.rightIndexSpread,
+      twist: rubPalmsLiveTuning.rightIndexTwist,
       distalBias: 1.10,
     },
     middle: {
-      curl: -4.2 - Math.cos(theta - 0.20) * 1.8 * orbitWeight,
-      spread: 0.0,
-      twist: 0,
+      curl: rubPalmsLiveTuning.rightMiddleCurl + Math.cos(theta - 0.20) * 2.0 * orbitWeight,
+      spread: rubPalmsLiveTuning.rightMiddleSpread,
+      twist: rubPalmsLiveTuning.rightMiddleTwist,
       distalBias: 1.10,
     },
     ring: {
-      curl: -3.8 - Math.cos(theta - 0.40) * 1.6 * orbitWeight,
-      spread: -0.10,
-      twist: 0,
+      curl: rubPalmsLiveTuning.rightRingCurl + Math.cos(theta - 0.40) * 2.0 * orbitWeight,
+      spread: rubPalmsLiveTuning.rightRingSpread,
+      twist: rubPalmsLiveTuning.rightRingTwist,
       distalBias: 1.10,
     },
     pinky: {
-      curl: -3.0 - Math.cos(theta - 0.60) * 1.4 * orbitWeight,
-      spread: -0.25,
-      twist: 0,
-      distalBias: 1.12,
+      curl: rubPalmsLiveTuning.rightPinkyCurl + Math.cos(theta - 0.60) * 1.8 * orbitWeight,
+      spread: rubPalmsLiveTuning.rightPinkySpread,
+      twist: rubPalmsLiveTuning.rightPinkyTwist,
+      distalBias: 1.10,
     },
   };
 
@@ -413,6 +609,8 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
 
   // Substage A & B (0.00 -> 0.16): 1. Sabun di Telapak Tangan -> 2. Satukan Kedua Telapak Tangan
   // Hands smoothly bring palms together face-to-face until they meet in soft contact at contactStart
+  const liveHintY = (rubPalmsLiveTuning.rightOffsetY + rubPalmsLiveTuning.leftOffsetY) * 0.5 + 0.015;
+
   if (p <= 0.16) {
     const t = smooth01(p / 0.16);
     const contactStart = evaluatePalmContactOrbit(0, 0);
@@ -441,7 +639,7 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
         wristEulerDeg: lWristApproach,
         fingers: lerpFingerTargets(SOAP_END_LEFT_FINGERS, contactStart.left.fingers, t),
       },
-      contactCenterHintOffset: [0.0, 0.015, -0.06],
+      contactCenterHintOffset: [0.0, liveHintY, -0.06],
     };
   }
 
@@ -468,7 +666,7 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
     return {
       right: orbitPose.right,
       left: orbitPose.left,
-      contactCenterHintOffset: [0.0, 0.015, -0.06],
+      contactCenterHintOffset: [0.0, liveHintY, -0.06],
     };
   }
 
@@ -480,7 +678,12 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
   const holdT = THREE.MathUtils.clamp((p - 0.92) / 0.08, 0, 1);
   const contactEnd = evaluatePalmContactOrbit(6.0 * Math.PI * 2, 0);
 
-  const rOff = lerpVec3Tuple(contactEnd.right.palmOffset, SUB_F_RIGHT_OFF, tPos);
+  const subFRightOff: [number, number, number] = [
+    SUB_F_RIGHT_OFF[0],
+    Math.max(0.040, rubPalmsLiveTuning.rightOffsetY - 0.025),
+    SUB_F_RIGHT_OFF[2],
+  ];
+  const rOff = lerpVec3Tuple(contactEnd.right.palmOffset, subFRightOff, tPos);
   const lOff = lerpVec3Tuple(contactEnd.left.palmOffset, SUB_F_LEFT_OFF, tPos);
 
   const holdBreath = Math.sin(holdT * Math.PI) * 0.8;
@@ -520,7 +723,7 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
       ),
       fingers: lerpFingerTargets(contactEnd.left.fingers, finalLeftFingers, tRot),
     },
-    contactCenterHintOffset: [0.0, 0.015, -0.06],
+    contactCenterHintOffset: [0.0, liveHintY, -0.06],
   };
 }
 /**
