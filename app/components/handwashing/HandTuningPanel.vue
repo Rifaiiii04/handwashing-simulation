@@ -123,11 +123,11 @@ function adjustDeg(key: keyof RubPalmsLiveTuning, deltaDeg: number, decimals = 1
 
 function applyRightThumbNatural() {
   tuning.rightThumbBaseCurl = -25.0
-  tuning.rightThumbBaseSpread = 11.5
+  tuning.rightThumbBaseSpread = 11.0
   tuning.rightThumbBaseTwist = 2.5
-  tuning.rightThumbMidCurl = 3.5
-  tuning.rightThumbMidSpread = -0.5
-  tuning.rightThumbMidTwist = -13.0
+  tuning.rightThumbMidCurl = 0.5
+  tuning.rightThumbMidSpread = -16.0
+  tuning.rightThumbMidTwist = 38.5
   tuning.rightThumbTipCurl = 13.0
   tuning.rightThumbTipSpread = -5.0
   tuning.rightThumbTipTwist = -8.5
@@ -148,12 +148,12 @@ function applyRightThumbOpenWide() {
 }
 
 function applyLeftThumbNatural() {
-  tuning.leftThumbBaseCurl = -19.5
-  tuning.leftThumbBaseSpread = 2.5
-  tuning.leftThumbBaseTwist = 2.0
+  tuning.leftThumbBaseCurl = 10.5
+  tuning.leftThumbBaseSpread = 8.0
+  tuning.leftThumbBaseTwist = 40.0
   tuning.leftThumbMidCurl = 14.5
-  tuning.leftThumbMidSpread = 36.0
-  tuning.leftThumbMidTwist = -11.5
+  tuning.leftThumbMidSpread = 20.0
+  tuning.leftThumbMidTwist = 19.0
   tuning.leftThumbTipCurl = 4.0
   tuning.leftThumbTipSpread = 10.0
   tuning.leftThumbTipTwist = 0.0
