@@ -4,50 +4,128 @@ import * as THREE from 'three'
 import { useGLTF } from '@tresjs/cientos'
 import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
+import { HANDWASHING_SECTIONS, type HandwashingStepSection } from '~/lib/handwashing/handwashingStepsData'
+import HandwashingTopbar from '~/components/handwashing/HandwashingTopbar.vue'
+import HandwashingStepCard from '~/components/handwashing/HandwashingStepCard.vue'
 import HandTuningPanel from '~/components/handwashing/HandTuningPanel.vue'
 import HandRigDebug from '~/components/handwashing/HandRigDebug.vue'
 
 const { state: model, isLoading } = useGLTF('models/washand.glb')
 const controller = new HandwashingSequenceController()
 const seqState = controller.state
-const stages = controller.stages
 const showTuning = ref(false)
 const hideDebugFaucet = ref(false)
+
+useHead({
+  title: 'Kemenkes RI · Simulasi 3D Cuci Tangan Pakai Sabun (CTPS)',
+  link: [
+    { rel: 'icon', type: 'image/png', href: '/logo.png' }
+  ]
+})
+
+const sections = HANDWASHING_SECTIONS
+const activeSectionId = ref<'persiapan' | 'langkah1' | 'langkah2' | 'langkah3' | 'langkah4' | 'langkah5' | 'langkah6'>('persiapan')
+const targetEndStageIndex = ref<number | null>(null)
+const isCardVisible = ref(true)
+
+const currentSection = computed<HandwashingStepSection>(() => {
+  const found = sections.find((s) => s.id === activeSectionId.value)
+  return found || sections[0]!
+})
+
+// Automatically keep activeSectionId updated as animation progresses
+watch(
+  () => seqState.stageIndex,
+  (stageIdx) => {
+    if (stageIdx <= 1) {
+      activeSectionId.value = 'persiapan'
+    } else if (stageIdx <= 3) {
+      activeSectionId.value = 'langkah1'
+    } else if (stageIdx === 4) {
+      activeSectionId.value = 'langkah2'
+    } else if (stageIdx === 5) {
+      activeSectionId.value = 'langkah3'
+    }
+  }
+)
+
+// Section playback end handler: pause smoothly when reaching target end stage
+watch(
+  [() => seqState.stageIndex, () => seqState.stageProgress],
+  ([stageIdx, stageProg]) => {
+    if (targetEndStageIndex.value !== null && seqState.isPlaying) {
+      if (stageIdx === targetEndStageIndex.value && stageProg >= 0.99) {
+        controller.pause()
+        targetEndStageIndex.value = null
+      }
+    }
+  }
+)
+
+function selectSection(section: HandwashingStepSection) {
+  if (!section.enabled) return
+  activeSectionId.value = section.id
+  targetEndStageIndex.value = section.endStageIndex
+  controller.goToStage(section.startStageIndex, true)
+}
+
+function handleReset() {
+  targetEndStageIndex.value = null
+  activeSectionId.value = 'persiapan'
+  controller.reset(false)
+}
+
+function handlePrevious() {
+  const currentIdx = sections.findIndex((s) => s.id === activeSectionId.value)
+  if (currentIdx > 0) {
+    const prevSection = sections[currentIdx - 1]
+    if (prevSection && prevSection.enabled) {
+      selectSection(prevSection)
+    }
+  }
+}
+
+function handleNext() {
+  const currentIdx = sections.findIndex((s) => s.id === activeSectionId.value)
+  if (currentIdx < sections.length - 1) {
+    const nextSection = sections[currentIdx + 1]
+    if (nextSection && nextSection.enabled) {
+      selectSection(nextSection)
+    }
+  }
+}
+
+function handleTogglePlay() {
+  if (seqState.isPlaying) {
+    controller.pause()
+    targetEndStageIndex.value = null
+  } else {
+    // If finished or near end of current step, replay from step start
+    if (seqState.stageProgress >= 0.99) {
+      selectSection(currentSection.value)
+    } else {
+      controller.play()
+    }
+  }
+}
+
 watch([() => model.value?.scene, () => controller.debug.enabled, hideDebugFaucet], ([scene, enabled, hidden]) => {
   const faucet = scene?.getObjectByName('faucet')
   if (faucet) faucet.visible = !(enabled && hidden)
 })
+
 const cameraPosition = ref<[number, number, number]>([1.65, 3.15, 3.35])
 const cameraTarget = ref<[number, number, number]>([0, 1.65, -.6])
 function debugCamera(view: 'front' | 'side' | 'top' | 'overview') {
-  // The overhead faucet occludes the fingers in an exact top inspection view.
   if (view === 'top') hideDebugFaucet.value = true
   cameraTarget.value = view === 'overview' ? [0, 1.65, -.6] : [0, 1.8, -.6]
   cameraPosition.value = view === 'front' ? [0, 2.1, .8]
     : view === 'side' ? [1.35, 1.95, -.55]
     : view === 'top' ? [0, 3.25, -.59] : [1.65, 3.15, 3.35]
 }
+
 watch(() => controller.debug.enabled, enabled => {
   if (!enabled) debugCamera('overview')
-})
-const stageGroups = [
-  { step: 1, label: 'Langkah 1 · Telapak', stages: stages.filter(stage => stage.whoStep === 1) },
-  { step: 2, label: 'Langkah 2 · Punggung', stages: stages.filter(stage => stage.whoStep === 2) },
-  { step: 3, label: 'Langkah 3 · Sela Jari', stages: stages.filter(stage => stage.whoStep === 3) },
-]
-const stageGuidance = computed(() => {
-  if (seqState.stageId === 'interlaceFingers') {
-    if (seqState.stageProgress < .28) return 'Hadapkan kedua telapak, buka sela jari, lalu masukkan dan lengkungkan jari seperti menggenggam longgar.'
-    if (seqState.stageProgress < 1) return 'Jaga sisi jari saling bersentuhan saat menggosok maju–mundur. Bagian tengah telapak boleh berjarak.'
-    return 'Sela-sela jari sudah digosok dari sisi telapak. Ulangi untuk mengamati gerakannya.'
-  }
-  if (seqState.stageId !== 'rubBacksOfHands') return seqState.stageDescription
-  const progress = seqState.stageProgress
-  if (progress < 0.14) return 'Letakkan telapak kanan di atas punggung tangan kiri, dengan jari saling menyela.'
-  if (progress < 0.43) return 'Gosok punggung tangan kiri dengan telapak kanan. Gerakkan jari di sela jari tangan kiri.'
-  if (progress < 0.59) return 'Lepaskan jari perlahan, lalu tukar posisi kedua tangan.'
-  if (progress < 1) return 'Gosok punggung tangan kanan dengan telapak kiri. Jari kembali saling menyela.'
-  return 'Kedua punggung tangan sudah digosok bergantian. Berikutnya, hadapkan telapak untuk menggosok sela-sela jari.'
 })
 
 /**
@@ -146,19 +224,18 @@ function refineSinkToMediumPoly(source: THREE.BufferGeometry): THREE.BufferGeome
 }
 
 function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
-  // Controlled gradient ramp data texture (discrete 4-tone anime ramp)
   const rampWidth = 256
   const rampData = new Uint8Array(rampWidth)
   for (let i = 0; i < rampWidth; i++) {
     const t = i / (rampWidth - 1)
     if (t < 0.24) {
-      rampData[i] = 90 // deep crevice shadow
+      rampData[i] = 90
     } else if (t < 0.48) {
-      rampData[i] = 145 // warm ceramic shadow
+      rampData[i] = 145
     } else if (t < 0.76) {
-      rampData[i] = 215 // warm ivory base
+      rampData[i] = 215
     } else {
-      rampData[i] = 255 // glazed highlight
+      rampData[i] = 255
     }
   }
   const gradientMap = new THREE.DataTexture(rampData, rampWidth, 1, THREE.RedFormat)
@@ -167,12 +244,11 @@ function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
   gradientMap.generateMipmaps = false
   gradientMap.needsUpdate = true
 
-  // 1990s anime clean white ceramic porcelain: pristine white with classic periwinkle cel shadows
-  const highlightColor = new THREE.Color('#FFFFFF') // Crisp pure white glaze highlight
-  const baseColor = new THREE.Color('#F8FAFD') // Clean white porcelain body
-  const midtoneColor = new THREE.Color('#DBE4EE') // Classic 90s anime periwinkle white cel shadow
-  const shadowColor = new THREE.Color('#B0C2D5') // Cool anime slate-periwinkle shadow
-  const deepShadowColor = new THREE.Color('#8298B2') // Deep crevice shadow
+  const highlightColor = new THREE.Color('#FFFFFF')
+  const baseColor = new THREE.Color('#F8FAFD')
+  const midtoneColor = new THREE.Color('#DBE4EE')
+  const shadowColor = new THREE.Color('#B0C2D5')
+  const deepShadowColor = new THREE.Color('#8298B2')
 
   const material = new THREE.MeshToonMaterial({
     color: baseColor,
@@ -182,7 +258,6 @@ function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
 
   material.customProgramCacheKey = () => 'anime-porcelain-sink-v4'
 
-  // Hook into shader compilation for precise 90s anime ceramic cel shading with satin glaze
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uHighlightColor = { value: highlightColor }
     shader.uniforms.uBaseColor = { value: baseColor }
@@ -216,10 +291,8 @@ function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
         vec3 V = normalize(vViewPosition);
         float NdotL = dot(N, L);
 
-        // Sub-pixel smooth transition for crisp anime cel line without jagged pixel artifacts
         float fEdge = fwidth(NdotL) * 0.75 + 0.001;
 
-        // Clean 4-tone anime ceramic light and shadow bands
         float deepStep   = smoothstep(uToneThresholds.x - fEdge, uToneThresholds.x + fEdge, NdotL);
         float shadowStep = smoothstep(uToneThresholds.y - fEdge, uToneThresholds.y + fEdge, NdotL);
         float baseStep   = smoothstep(uToneThresholds.z - fEdge, uToneThresholds.z + fEdge, NdotL);
@@ -230,34 +303,27 @@ function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
         animeTone = mix(animeTone, uBaseColor, baseStep);
         animeTone = mix(animeTone, uHighlightColor, highStep);
 
-        // Tasteful 90s anime cel shadow details (contact shadows, overhang drop shadow)
-        // 1. Under-basin overhang shadow on top of pedestal column
         float isPedestal = step(vSinkLocalPosition.y, -1.65);
         float pedestalCollarShadow = smoothstep(-1.95, -1.72, vSinkLocalPosition.y) * isPedestal * 0.35;
 
-        // 2. Subtle lip crease shadow under outer overhang perimeter
         float isUnderLip = smoothstep(-1.20, -1.14, vSinkLocalPosition.y) * (1.0 - smoothstep(-0.98, -0.92, vSinkLocalPosition.y));
         float lipShadow = isUnderLip * smoothstep(0.4, 0.9, length(vSinkLocalPosition.xz)) * 0.30;
 
-        // 3. Subtle basin inner bottom boundary shadow
         float isInnerBasin = smoothstep(-1.16, -1.10, vSinkLocalPosition.y) * (1.0 - smoothstep(-0.70, -0.55, vSinkLocalPosition.y));
         float basinShadow = isInnerBasin * (1.0 - smoothstep(0.2, 0.8, length(vSinkLocalPosition.xz))) * 0.22;
 
         float celDetailShadow = clamp(pedestalCollarShadow + lipShadow + basinShadow, 0.0, 0.50);
         animeTone = mix(animeTone, uShadowColor, celDetailShadow);
 
-        // Subtle satin highlights and ceramic glaze sheen (stylized ceramic luster, not plastic)
         vec3 H = normalize(L + V);
         float NdotH = max(dot(N, H), 0.0);
         float spec = pow(NdotH, 24.0);
         float fSpec = fwidth(spec) * 0.5 + 0.001;
         float satinGlint = smoothstep(0.55 - fSpec, 0.55 + fSpec, spec);
 
-        // Gentle glaze rim reflection along basin curvature
         float fresnel = 1.0 - max(dot(N, V), 0.0);
         float glazeSheen = smoothstep(0.72, 0.95, fresnel) * 0.16;
 
-        // Subtle crisp anime glaze gleam on top front bevel edge
         float rimGlint = smoothstep(-0.43, -0.41, vSinkLocalPosition.y) * smoothstep(0.4, 0.8, -vSinkLocalPosition.z) * 0.30;
 
         vec3 ceramicColor = mix(animeTone, uHighlightColor, clamp(satinGlint * 0.72 + glazeSheen + rimGlint, 0.0, 1.0));
@@ -298,180 +364,83 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="relative w-screen h-screen bg-gray-900 overflow-hidden select-none">
+  <!-- Light Mode Studio Gradient Background with Kemenkes Logo Color Harmony (Teal #00A99D + Lime #C4D600) -->
+  <div
+    class="relative w-screen h-screen overflow-hidden select-none bg-[#edf7f7]"
+    style="background: radial-gradient(ellipse 70% 60% at 15% 15%, rgba(0, 169, 157, 0.20) 0%, transparent 65%),
+                radial-gradient(ellipse 65% 55% at 85% 85%, rgba(196, 214, 0, 0.18) 0%, transparent 65%),
+                radial-gradient(ellipse 60% 50% at 80% 20%, rgba(0, 180, 216, 0.14) 0%, transparent 60%),
+                radial-gradient(ellipse 50% 50% at 50% 50%, rgba(255, 255, 255, 0.95) 0%, transparent 100%),
+                linear-gradient(135deg, #eaf6f6 0%, #f6fbfb 45%, #f4fbf1 100%);"
+  >
+    <!-- Loading Screen in Light Mode -->
     <div
       v-if="isLoading"
-      class="absolute inset-0 z-10 flex items-center justify-center text-white"
+      class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 text-slate-800"
     >
-      Loading 3D Model...
+      <img src="/logo.png" alt="Logo Kemenkes" class="w-12 h-12 object-contain animate-bounce drop-shadow-sm" />
+      <div class="w-8 h-8 rounded-full border-2 border-[#00A99D] border-t-transparent animate-spin" />
+      <span class="text-sm font-semibold tracking-wide text-slate-700">Memuat Model 3D Simulasi Kemenkes...</span>
     </div>
 
-    <TresCanvas v-else clear-color="#111111">
+    <!-- 3D WebGL Canvas with Light Studio Clear Color -->
+    <TresCanvas v-else clear-color="#edf7f7">
       <TresPerspectiveCamera :position="cameraPosition" :fov="45" />
-      <!-- Cinematic 90s Anime Sun & Lighting Setup -->
-      <!-- 1. Warm Sun Key Light: creates warm daytime cel highlights and crisp shadow angles -->
-      <TresDirectionalLight :position="[4.5, 6.0, 3.8]" :intensity="2.4" color="#FFF5E4" />
-      <!-- 2. Cool Sky Ambient Light: fills shadows with classic anime periwinkle sky atmosphere -->
-      <TresAmbientLight :intensity="0.7" color="#BDD3EB" />
-      <!-- 3. Cinematic Rim / Backlight: illuminates silhouettes for anime depth and separation -->
-      <TresDirectionalLight :position="[-4.0, 4.5, -3.2]" :intensity="1.0" color="#D0E3FA" />
+      <!-- Studio Light Setup for Crisp Light Mode (Similar to Apple 3D Product Renderings) -->
+      <!-- 1. Warm Sun Key Light: creates clean daytime cel highlights -->
+      <TresDirectionalLight :position="[4.5, 6.5, 3.8]" :intensity="2.2" color="#FFFFFF" />
+      <!-- 2. Studio Ambient Light: soft, luminous fill -->
+      <TresAmbientLight :intensity="1.15" color="#F0F9FA" />
+      <!-- 3. Studio Fill Light from opposite side -->
+      <TresDirectionalLight :position="[-3.5, 4.5, 3.0]" :intensity="0.9" color="#E2F6F3" />
+      <!-- 4. Soft Rim / Backlight -->
+      <TresDirectionalLight :position="[-2.0, 5.0, -3.5]" :intensity="0.8" color="#EDF8E9" />
       <OrbitControls :target="cameraTarget" :min-distance="0.65" :max-distance="6" />
       <primitive v-if="model?.scene" :object="model.scene" />
       <HandwashingWaterSystem :controller="controller" />
       <HandRigDebug :controller="controller" />
     </TresCanvas>
 
+    <!-- Topbar: Compact Single-Row Apple Light Glassmorphism with Kemenkes Identity & Controls -->
+    <HandwashingTopbar
+      v-if="!isLoading"
+      :controller="controller"
+      :sections="sections"
+      :active-section-id="activeSectionId"
+      :is-card-visible="isCardVisible"
+      :show-tuning="showTuning"
+      @select-section="selectSection"
+      @reset="handleReset"
+      @previous="handlePrevious"
+      @next="handleNext"
+      @toggle-play="handleTogglePlay"
+      @toggle-card="isCardVisible = !isCardVisible"
+      @open-tuning="showTuning = true"
+    />
+
+    <!-- Near-Hand Step Guidance & Benefits Modal Card (Apple Light Glassmorphism) -->
+    <HandwashingStepCard
+      v-if="!isLoading"
+      :controller="controller"
+      :current-section="currentSection"
+      :is-visible="isCardVisible"
+      @toggle-visible="isCardVisible = !isCardVisible"
+    />
+
     <!-- Live Interactive Tuning Tool -->
     <HandTuningPanel v-if="!isLoading && showTuning" :controller="controller" />
-    <div v-if="!isLoading && controller.debug.enabled" class="absolute left-4 top-4 z-20 flex flex-wrap gap-1 rounded-lg bg-slate-950/90 p-2 text-xs text-slate-100" aria-label="Sudut inspeksi kamera">
-      <button class="rounded px-3 py-2 hover:bg-slate-700" @click="debugCamera('front')">Depan</button>
-      <button class="rounded px-3 py-2 hover:bg-slate-700" @click="debugCamera('side')">Samping</button>
-      <button class="rounded px-3 py-2 hover:bg-slate-700" @click="debugCamera('top')">Atas</button>
-      <button class="rounded px-3 py-2 hover:bg-slate-700" @click="debugCamera('overview')">Utuh</button>
-      <label class="flex items-center gap-2 px-2"><input v-model="hideDebugFaucet" type="checkbox" class="accent-sky-400"> Sembunyikan keran</label>
-    </div>
-    <button
-      v-if="!isLoading && !showTuning"
-      type="button"
-      class="absolute right-4 top-4 z-20 rounded-lg border border-slate-700 bg-slate-900/85 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
-      @click="showTuning = true"
-    >
-      Panel Tuning
-    </button>
 
-    <!-- Minimal stage & playback overlay controls -->
+    <!-- Debug Camera Angle Controls (Active only when debug mode is triggered) -->
     <div
-      v-if="!isLoading && !controller.debug.enabled"
-      class="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex flex-col items-center px-4"
+      v-if="!isLoading && controller.debug.enabled"
+      class="fixed bottom-4 right-4 z-20 flex flex-wrap gap-1 rounded-full bg-white/85 backdrop-blur-md p-1.5 text-xs text-slate-700 border border-slate-200 shadow-lg"
+      aria-label="Sudut inspeksi kamera"
     >
-      <div
-        class="pointer-events-auto w-full max-w-4xl rounded-xl border border-slate-700/80 bg-slate-900/85 p-3 text-slate-100 shadow-xl backdrop-blur-md"
-      >
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-2 text-xs font-medium text-sky-400">
-              <span>Simulasi Langkah 1–3</span>
-              <span v-if="seqState.whoStep" class="rounded bg-sky-500/20 px-1.5 py-0.5 text-sky-300">
-                Kemenkes · Langkah {{ seqState.whoStep }}
-              </span>
-              <span
-                class="rounded px-1.5 py-0.5"
-                :class="seqState.faucetActive ? 'bg-blue-500/25 text-blue-300' : 'bg-slate-700/70 text-slate-400'"
-              >
-                Keran: {{ seqState.faucetActive ? 'ON' : 'OFF' }}
-              </span>
-              <span
-                v-if="seqState.foamIntensity > 0.01"
-                class="rounded bg-cyan-500/20 px-1.5 py-0.5 text-cyan-300"
-              >
-                Busa: {{ Math.round(seqState.foamIntensity * 100) }}%
-              </span>
-            </div>
-            <h2 class="text-sm font-semibold text-white sm:text-base">
-              {{ seqState.stageLabel }}
-            </h2>
-            <p class="text-xs leading-relaxed text-slate-300" aria-live="polite" aria-atomic="true">
-              {{ stageGuidance }}
-            </p>
-          </div>
-
-          <div class="flex items-center gap-1.5">
-            <button
-              type="button"
-              class="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40"
-              :disabled="seqState.stageIndex === 0"
-              @click="controller.prevStage()"
-            >
-              Sebelumnya
-            </button>
-            <button
-              type="button"
-              class="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500"
-              @click="controller.togglePlay()"
-            >
-              {{ seqState.isPlaying ? 'Jeda' : seqState.sequenceProgress >= 1 ? 'Ulangi Demo' : 'Putar Demo' }}
-            </button>
-            <button
-              type="button"
-              class="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40"
-              :disabled="seqState.stageIndex === stages.length - 1"
-              @click="controller.nextStage()"
-            >
-              Berikutnya
-            </button>
-            <button
-              type="button"
-              class="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
-              @click="controller.reset(false)"
-            >
-              Atur Ulang
-            </button>
-          </div>
-        </div>
-
-        <!-- Overall & stage progress bar -->
-        <div
-          class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"
-          role="progressbar"
-          aria-label="Kemajuan simulasi langkah 1 sampai 3"
-          :aria-valuenow="Math.round(seqState.sequenceProgress * 100)"
-          :aria-valuemin="0"
-          :aria-valuemax="100"
-        >
-          <div
-            class="h-full bg-gradient-to-r from-sky-500 to-cyan-400 transition-all duration-75"
-            :style="{ width: `${Math.round(seqState.sequenceProgress * 100)}%` }"
-          />
-        </div>
-
-        <!-- Four sub-stages belong to technique 1; later techniques have their own groups. -->
-        <div class="mt-2 flex flex-wrap gap-x-4 gap-y-2">
-          <div v-for="group in stageGroups" :key="group.step" role="group" :aria-label="group.label">
-            <p class="mb-1 text-[10px] font-semibold text-slate-400">{{ group.label }}</p>
-            <div class="flex flex-wrap items-center gap-1.5">
-              <button
-                v-for="stage in group.stages"
-                :key="stage.id"
-                type="button"
-                class="rounded px-2.5 py-1.5 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
-                :aria-current="stage.id === seqState.stageId ? 'step' : undefined"
-                :class="
-                  stage.id === seqState.stageId
-                    ? 'bg-sky-500 text-white shadow-sm'
-                    : stages.indexOf(stage) < seqState.stageIndex
-                      ? 'bg-sky-900/50 text-sky-200 hover:bg-sky-800/60'
-                      : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
-                "
-                @click="controller.goToStage(stage.id, true)"
-              >
-                {{ stage.shortLabel }}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Clearly distinguish implemented techniques from the remaining reference steps. -->
-        <div class="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-800 pt-1.5 text-[10px]">
-          <span class="mr-1 font-semibold text-slate-400">Aktif:</span>
-          <span class="rounded bg-sky-500/20 px-1.5 py-0.5 font-medium text-sky-300 border border-sky-500/30">
-            Langkah 1–3
-          </span>
-          <span class="mx-1 text-slate-600">|</span>
-          <span class="mr-1 font-semibold text-slate-400">Belum tersedia:</span>
-          <span
-            v-for="label in [
-              '4. Kunci Jari',
-              '5. Ibu Jari',
-              '6. Ujung Jari & Bilas',
-            ]"
-            :key="label"
-            class="cursor-not-allowed rounded bg-slate-800/50 px-1.5 py-0.5 text-slate-500"
-            title="Akan dilanjutkan pada tahap berikutnya"
-          >
-            {{ label }}
-          </span>
-        </div>
-      </div>
+      <button class="rounded-full px-2.5 py-1 hover:bg-slate-100" @click="debugCamera('front')">Depan</button>
+      <button class="rounded-full px-2.5 py-1 hover:bg-slate-100" @click="debugCamera('side')">Samping</button>
+      <button class="rounded-full px-2.5 py-1 hover:bg-slate-100" @click="debugCamera('top')">Atas</button>
+      <button class="rounded-full px-2.5 py-1 hover:bg-slate-100" @click="debugCamera('overview')">Utuh</button>
+      <label class="flex items-center gap-1.5 px-2 font-medium"><input v-model="hideDebugFaucet" type="checkbox" class="accent-[#00A99D]"> Sembunyikan keran</label>
     </div>
   </div>
 </template>
