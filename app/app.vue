@@ -1,15 +1,54 @@
 <script setup lang="ts">
-import { onUnmounted, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { useGLTF } from '@tresjs/cientos'
 import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
 import HandTuningPanel from '~/components/handwashing/HandTuningPanel.vue'
+import HandRigDebug from '~/components/handwashing/HandRigDebug.vue'
 
 const { state: model, isLoading } = useGLTF('models/washand.glb')
 const controller = new HandwashingSequenceController()
 const seqState = controller.state
 const stages = controller.stages
+const showTuning = ref(false)
+const hideDebugFaucet = ref(false)
+watch([() => model.value?.scene, () => controller.debug.enabled, hideDebugFaucet], ([scene, enabled, hidden]) => {
+  const faucet = scene?.getObjectByName('faucet')
+  if (faucet) faucet.visible = !(enabled && hidden)
+})
+const cameraPosition = ref<[number, number, number]>([1.65, 3.15, 3.35])
+const cameraTarget = ref<[number, number, number]>([0, 1.65, -.6])
+function debugCamera(view: 'front' | 'side' | 'top' | 'overview') {
+  // The overhead faucet occludes the fingers in an exact top inspection view.
+  if (view === 'top') hideDebugFaucet.value = true
+  cameraTarget.value = view === 'overview' ? [0, 1.65, -.6] : [0, 1.8, -.6]
+  cameraPosition.value = view === 'front' ? [0, 2.1, .8]
+    : view === 'side' ? [1.35, 1.95, -.55]
+    : view === 'top' ? [0, 3.25, -.59] : [1.65, 3.15, 3.35]
+}
+watch(() => controller.debug.enabled, enabled => {
+  if (!enabled) debugCamera('overview')
+})
+const stageGroups = [
+  { step: 1, label: 'Langkah 1 · Telapak', stages: stages.filter(stage => stage.whoStep === 1) },
+  { step: 2, label: 'Langkah 2 · Punggung', stages: stages.filter(stage => stage.whoStep === 2) },
+  { step: 3, label: 'Langkah 3 · Sela Jari', stages: stages.filter(stage => stage.whoStep === 3) },
+]
+const stageGuidance = computed(() => {
+  if (seqState.stageId === 'interlaceFingers') {
+    if (seqState.stageProgress < .28) return 'Hadapkan kedua telapak, buka sela jari, lalu masukkan dan lengkungkan jari seperti menggenggam longgar.'
+    if (seqState.stageProgress < .94) return 'Jaga sisi jari saling bersentuhan saat menggosok maju–mundur. Bagian tengah telapak boleh berjarak.'
+    return 'Sela-sela jari sudah digosok dari sisi telapak. Ulangi untuk mengamati gerakannya.'
+  }
+  if (seqState.stageId !== 'rubBacksOfHands') return seqState.stageDescription
+  const progress = seqState.stageProgress
+  if (progress < 0.14) return 'Letakkan telapak kanan di atas punggung tangan kiri, dengan jari saling menyela.'
+  if (progress < 0.43) return 'Gosok punggung tangan kiri dengan telapak kanan. Gerakkan jari di sela jari tangan kiri.'
+  if (progress < 0.59) return 'Lepaskan jari perlahan, lalu tukar posisi kedua tangan.'
+  if (progress < 0.92) return 'Gosok punggung tangan kanan dengan telapak kiri. Jari kembali saling menyela.'
+  return 'Kedua punggung tangan sudah digosok bergantian. Berikutnya, hadapkan telapak untuk menggosok sela-sela jari.'
+})
 
 /**
  * Subdivide low-poly sink mesh into smooth medium-poly (4,160 triangles),
@@ -252,6 +291,8 @@ watch(
 )
 
 onUnmounted(() => {
+  const faucet = model.value?.scene?.getObjectByName('faucet')
+  if (faucet) faucet.visible = true
   controller.dispose()
 })
 </script>
@@ -266,7 +307,7 @@ onUnmounted(() => {
     </div>
 
     <TresCanvas v-else clear-color="#111111">
-      <TresPerspectiveCamera :position="[0, 1, 5]" :fov="45" />
+      <TresPerspectiveCamera :position="cameraPosition" :fov="45" />
       <!-- Cinematic 90s Anime Sun & Lighting Setup -->
       <!-- 1. Warm Sun Key Light: creates warm daytime cel highlights and crisp shadow angles -->
       <TresDirectionalLight :position="[4.5, 6.0, 3.8]" :intensity="2.4" color="#FFF5E4" />
@@ -274,17 +315,33 @@ onUnmounted(() => {
       <TresAmbientLight :intensity="0.7" color="#BDD3EB" />
       <!-- 3. Cinematic Rim / Backlight: illuminates silhouettes for anime depth and separation -->
       <TresDirectionalLight :position="[-4.0, 4.5, -3.2]" :intensity="1.0" color="#D0E3FA" />
-      <OrbitControls />
+      <OrbitControls :target="cameraTarget" :min-distance="0.65" :max-distance="6" />
       <primitive v-if="model?.scene" :object="model.scene" />
       <HandwashingWaterSystem :controller="controller" />
+      <HandRigDebug :controller="controller" />
     </TresCanvas>
 
     <!-- Live Interactive Tuning Tool -->
-    <HandTuningPanel v-if="!isLoading" :controller="controller" />
+    <HandTuningPanel v-if="!isLoading && showTuning" :controller="controller" />
+    <div v-if="!isLoading && controller.debug.enabled" class="absolute left-4 top-4 z-20 flex flex-wrap gap-1 rounded-lg bg-slate-950/90 p-2 text-xs text-slate-100" aria-label="Sudut inspeksi kamera">
+      <button class="rounded px-3 py-2 hover:bg-slate-700" @click="debugCamera('front')">Depan</button>
+      <button class="rounded px-3 py-2 hover:bg-slate-700" @click="debugCamera('side')">Samping</button>
+      <button class="rounded px-3 py-2 hover:bg-slate-700" @click="debugCamera('top')">Atas</button>
+      <button class="rounded px-3 py-2 hover:bg-slate-700" @click="debugCamera('overview')">Utuh</button>
+      <label class="flex items-center gap-2 px-2"><input v-model="hideDebugFaucet" type="checkbox" class="accent-sky-400"> Sembunyikan keran</label>
+    </div>
+    <button
+      v-if="!isLoading && !showTuning"
+      type="button"
+      class="absolute right-4 top-4 z-20 rounded-lg border border-slate-700 bg-slate-900/85 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
+      @click="showTuning = true"
+    >
+      Panel Tuning
+    </button>
 
     <!-- Minimal stage & playback overlay controls -->
     <div
-      v-if="!isLoading"
+      v-if="!isLoading && !controller.debug.enabled"
       class="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex flex-col items-center px-4"
     >
       <div
@@ -292,10 +349,10 @@ onUnmounted(() => {
       >
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2 text-xs font-medium text-sky-400">
-              <span>Tahap {{ seqState.stageIndex + 1 }} / {{ stages.length }}</span>
+            <div class="flex flex-wrap items-center gap-2 text-xs font-medium text-sky-400">
+              <span>Simulasi Langkah 1–3</span>
               <span v-if="seqState.whoStep" class="rounded bg-sky-500/20 px-1.5 py-0.5 text-sky-300">
-                WHO Langkah {{ seqState.whoStep }}
+                Kemenkes · Langkah {{ seqState.whoStep }}
               </span>
               <span
                 class="rounded px-1.5 py-0.5"
@@ -310,11 +367,11 @@ onUnmounted(() => {
                 Busa: {{ Math.round(seqState.foamIntensity * 100) }}%
               </span>
             </div>
-            <h2 class="truncate text-sm font-semibold text-white sm:text-base">
+            <h2 class="text-sm font-semibold text-white sm:text-base">
               {{ seqState.stageLabel }}
             </h2>
-            <p class="truncate text-xs text-slate-300">
-              {{ seqState.stageDescription }}
+            <p class="text-xs leading-relaxed text-slate-300" aria-live="polite" aria-atomic="true">
+              {{ stageGuidance }}
             </p>
           </div>
 
@@ -325,14 +382,14 @@ onUnmounted(() => {
               :disabled="seqState.stageIndex === 0"
               @click="controller.prevStage()"
             >
-              Prev
+              Sebelumnya
             </button>
             <button
               type="button"
               class="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500"
               @click="controller.togglePlay()"
             >
-              {{ seqState.isPlaying ? 'Pause' : 'Play Demo' }}
+              {{ seqState.isPlaying ? 'Jeda' : seqState.sequenceProgress >= 1 ? 'Ulangi Demo' : 'Putar Demo' }}
             </button>
             <button
               type="button"
@@ -340,62 +397,72 @@ onUnmounted(() => {
               :disabled="seqState.stageIndex === stages.length - 1"
               @click="controller.nextStage()"
             >
-              Next
+              Berikutnya
             </button>
             <button
               type="button"
               class="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
               @click="controller.reset(false)"
             >
-              Reset
+              Atur Ulang
             </button>
           </div>
         </div>
 
         <!-- Overall & stage progress bar -->
-        <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+        <div
+          class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"
+          role="progressbar"
+          aria-label="Kemajuan simulasi langkah 1 sampai 3"
+          :aria-valuenow="Math.round(seqState.sequenceProgress * 100)"
+          :aria-valuemin="0"
+          :aria-valuemax="100"
+        >
           <div
             class="h-full bg-gradient-to-r from-sky-500 to-cyan-400 transition-all duration-75"
             :style="{ width: `${Math.round(seqState.sequenceProgress * 100)}%` }"
           />
         </div>
 
-        <!-- Active 4-stage selector pills -->
-        <div class="mt-2 flex flex-wrap items-center gap-1.5">
-          <button
-            v-for="(stage, idx) in stages"
-            :key="stage.id"
-            type="button"
-            class="rounded px-2.5 py-1 text-[11px] font-medium transition-colors"
-            :class="
-              idx === seqState.stageIndex
-                ? 'bg-sky-500 text-white shadow-sm'
-                : idx < seqState.stageIndex
-                  ? 'bg-sky-900/50 text-sky-200 hover:bg-sky-800/60'
-                  : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
-            "
-            @click="controller.goToStage(idx, true)"
-          >
-            {{ stage.shortLabel }}
-          </button>
+        <!-- Four sub-stages belong to technique 1; later techniques have their own groups. -->
+        <div class="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+          <div v-for="group in stageGroups" :key="group.step" role="group" :aria-label="group.label">
+            <p class="mb-1 text-[10px] font-semibold text-slate-400">{{ group.label }}</p>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button
+                v-for="stage in group.stages"
+                :key="stage.id"
+                type="button"
+                class="rounded px-2.5 py-1.5 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
+                :aria-current="stage.id === seqState.stageId ? 'step' : undefined"
+                :class="
+                  stage.id === seqState.stageId
+                    ? 'bg-sky-500 text-white shadow-sm'
+                    : stages.indexOf(stage) < seqState.stageIndex
+                      ? 'bg-sky-900/50 text-sky-200 hover:bg-sky-800/60'
+                      : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+                "
+                @click="controller.goToStage(stage.id, true)"
+              >
+                {{ stage.shortLabel }}
+              </button>
+            </div>
+          </div>
         </div>
 
-        <!-- Status cakupan alur: Tahap 1 s.d. 4 (Ke Keran, Basuh Tangan, Pakai Sabun, Gosok Telapak WHO) -->
+        <!-- Clearly distinguish implemented techniques from the remaining reference steps. -->
         <div class="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-800 pt-1.5 text-[10px]">
-          <span class="mr-1 font-semibold text-slate-400">Fokus Alur:</span>
+          <span class="mr-1 font-semibold text-slate-400">Aktif:</span>
           <span class="rounded bg-sky-500/20 px-1.5 py-0.5 font-medium text-sky-300 border border-sky-500/30">
-            Tahap 1 - 4: Basuh, Sabun & Gosok Telapak (Aktif)
+            Langkah 1–3
           </span>
           <span class="mx-1 text-slate-600">|</span>
-          <span class="mr-1 font-semibold text-slate-400">Langkah Berikutnya:</span>
+          <span class="mr-1 font-semibold text-slate-400">Belum tersedia:</span>
           <span
             v-for="label in [
-              '5. Punggung Tangan',
-              '6. Sela Jari',
-              '7. Kunci Jari',
-              '8. Ibu Jari',
-              '9. Ujung Jari',
-              '10. Bilas Air',
+              '4. Kunci Jari',
+              '5. Ibu Jari',
+              '6. Ujung Jari & Bilas',
             ]"
             :key="label"
             class="cursor-not-allowed rounded bg-slate-800/50 px-1.5 py-0.5 text-slate-500"

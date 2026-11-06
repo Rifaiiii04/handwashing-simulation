@@ -4,8 +4,10 @@ import {
   FINGER_NAMES,
   type MappedHandPairRig,
   type MappedHandRig,
+  type MappedBoneJoint,
 } from "./handRigMapping";
 import type { HandPoseTarget, StagePoseEvaluation } from "./handwashingPoses";
+import type { DebugBoneOverride, DebugHandOverride, DebugStageOverride } from "./handPoseDebug";
 
 const DEG2RAD = Math.PI / 180;
 const scratchEuler = new THREE.Euler();
@@ -14,11 +16,22 @@ const scratchTargetQuat = new THREE.Quaternion();
 const scratchPivotOffset = new THREE.Vector3();
 const scratchTargetPalm = new THREE.Vector3();
 const scratchKnuckleWorld = new THREE.Vector3();
-const scratchTipWorld = new THREE.Vector3();
 const scratchWristWorld = new THREE.Vector3();
 const scratchIndexKnuckleWorld = new THREE.Vector3();
 const scratchPinkyKnuckleWorld = new THREE.Vector3();
 const scratchRadialVec = new THREE.Vector3();
+const scratchMetacarpalWorld = new THREE.Vector3();
+const scratchCurrentPivot = new THREE.Vector3();
+const scratchJointPosition = new THREE.Vector3();
+
+function belongsToScene(object: THREE.Object3D, scene: THREE.Object3D): boolean {
+  let ancestor: THREE.Object3D | null = object;
+  while (ancestor) {
+    if (ancestor === scene) return true;
+    ancestor = ancestor.parent;
+  }
+  return false;
+}
 
 export class HandAnimationController {
   private rig: MappedHandPairRig | null = null;
@@ -28,10 +41,13 @@ export class HandAnimationController {
     if (!scene) return false;
     if (
       this.rig &&
-      this.boundScene === scene &&
-      this.rig.right.armature.parent &&
-      this.rig.left.armature.parent
+      belongsToScene(this.rig.right.armature, scene) &&
+      belongsToScene(this.rig.left.armature, scene)
     ) {
+      // The GLB root is later attached beneath the Tres scene. Binding through
+      // that parent must reuse the same rig: remapping after idle/playback has
+      // started would capture animated transforms as a new anatomical rest pose.
+      this.boundScene = scene;
       return true;
     }
 
@@ -101,6 +117,7 @@ export class HandAnimationController {
     delta: number,
     poseLambda: number,
     boneLambda: number,
+    debug?: DebugStageOverride,
   ): void {
     if (!this.rig) return;
 
@@ -108,8 +125,8 @@ export class HandAnimationController {
     const poseAlpha = clampedDelta > 0 ? 1 - Math.exp(-poseLambda * clampedDelta) : 1;
     const boneAlpha = clampedDelta > 0 ? 1 - Math.exp(-boneLambda * clampedDelta) : 1;
 
-    this.applySingleHandPose(this.rig.right, evaluation.right, poseAlpha, boneAlpha);
-    this.applySingleHandPose(this.rig.left, evaluation.left, poseAlpha, boneAlpha);
+    this.applySingleHandPose(this.rig.right, evaluation.right, poseAlpha, boneAlpha, debug?.right);
+    this.applySingleHandPose(this.rig.left, evaluation.left, poseAlpha, boneAlpha, debug?.left);
 
     // Update live world-space contact center, palm normals, and receiving palm target from actual bone transforms
     for (const hand of [this.rig.right, this.rig.left]) {
@@ -119,12 +136,13 @@ export class HandAnimationController {
 
       if (midJoints.length >= 2) {
         const knuckleBone = midJoints[1]!.bone;
-        const tipBone = midJoints[midJoints.length - 1]!.bone;
         hand.wristJoint.bone.getWorldPosition(scratchWristWorld);
         knuckleBone.getWorldPosition(scratchKnuckleWorld);
-        tipBone.getWorldPosition(scratchTipWorld);
+        midJoints[0]!.bone.getWorldPosition(scratchMetacarpalWorld);
         hand.currentKnuckleWorld.copy(scratchKnuckleWorld);
-        hand.currentPalmWorld.copy(scratchKnuckleWorld).lerp(scratchTipWorld, 0.42);
+        // Use the same anatomical palm landmark as the rig's rest pivot. The old
+        // knuckle-to-fingertip interpolation located soap/foam on the fingers.
+        hand.currentPalmWorld.copy(scratchMetacarpalWorld).lerp(scratchKnuckleWorld, 0.65);
 
         hand.currentFingerForward
           .subVectors(scratchKnuckleWorld, scratchWristWorld)
@@ -151,10 +169,8 @@ export class HandAnimationController {
       .addVectors(this.rig.right.currentPalmWorld, this.rig.left.currentPalmWorld)
       .multiplyScalar(0.5);
 
-    this.rig.receivingPalmWorld
-      .copy(this.rig.left.currentKnuckleWorld)
-      .lerp(this.rig.left.currentPalmWorld, 0.55);
-    this.rig.receivingPalmWorld.y += 0.018;
+    this.rig.receivingPalmWorld.copy(this.rig.left.currentPalmWorld)
+      .addScaledVector(this.rig.left.currentPalmNormal, 0.072);
   }
 
   private applySingleHandPose(
@@ -162,13 +178,14 @@ export class HandAnimationController {
     target: HandPoseTarget,
     poseAlpha: number,
     boneAlpha: number,
+    debug?: DebugHandOverride,
   ): void {
     // 1. Whole-hand orientation around the verified palm center pivot using ZXY order
     // so yaw & pitch level the forearm along -Z before roll rotates around the forearm axis.
     scratchEuler.set(
-      target.palmEulerDeg[0] * DEG2RAD,
-      target.palmEulerDeg[1] * DEG2RAD,
-      target.palmEulerDeg[2] * DEG2RAD,
+      (target.palmEulerDeg[0] + (debug?.rotation[0] ?? 0)) * DEG2RAD,
+      (target.palmEulerDeg[1] + (debug?.rotation[1] ?? 0)) * DEG2RAD,
+      (target.palmEulerDeg[2] + (debug?.rotation[2] ?? 0)) * DEG2RAD,
       "ZXY",
     );
     scratchDeltaQuat.setFromEuler(scratchEuler);
@@ -180,14 +197,27 @@ export class HandAnimationController {
     scratchTargetPalm
       .copy(hand.palmWorldRest)
       .add(scratchPivotOffset.set(target.palmOffset[0], target.palmOffset[1], target.palmOffset[2]));
+    if (debug) {
+      scratchTargetPalm.x += debug.position[0];
+      scratchTargetPalm.y += debug.position[1];
+      scratchTargetPalm.z += debug.position[2];
+    }
     scratchPivotOffset
       .copy(hand.palmLocalPivot)
       .multiply(hand.restScale)
       .applyQuaternion(hand.targetQuaternion);
     hand.targetPosition.copy(scratchTargetPalm).sub(scratchPivotOffset);
 
-    hand.armature.position.lerp(hand.targetPosition, poseAlpha);
+    // Interpolate the palm anchor, then reconstruct the armature position from
+    // the interpolated rotation. Independently damping position and rotation
+    // makes a long forearm swing the palm away from its contact surface.
+    scratchCurrentPivot.copy(hand.palmLocalPivot)
+      .multiply(hand.restScale).applyQuaternion(hand.armature.quaternion)
+      .add(hand.armature.position).lerp(scratchTargetPalm, poseAlpha);
     hand.armature.quaternion.slerp(hand.targetQuaternion, poseAlpha);
+    scratchPivotOffset.copy(hand.palmLocalPivot)
+      .multiply(hand.restScale).applyQuaternion(hand.armature.quaternion);
+    hand.armature.position.copy(scratchCurrentPivot).sub(scratchPivotOffset);
 
     // 3. Wrist root bone local rotation relative to its rest pose
     scratchEuler.set(
@@ -201,6 +231,7 @@ export class HandAnimationController {
       hand.wristJoint.restQuaternion,
       scratchDeltaQuat,
     );
+    this.applyJointOffsets(hand.wristJoint, undefined, debug?.bones[hand.wristJoint.name], boneAlpha);
     hand.wristJoint.bone.quaternion.slerp(hand.wristJoint.targetQuaternion, boneAlpha);
 
     // 4. Anatomical finger bone chain rotations relative to each bone's calibrated rest pose
@@ -256,12 +287,34 @@ export class HandAnimationController {
         scratchEuler.set(curlRad, twistRad, spreadRad, "XYZ");
         scratchDeltaQuat.setFromEuler(scratchEuler);
         joint.targetQuaternion.multiplyQuaternions(joint.restQuaternion, scratchDeltaQuat);
+        this.applyJointOffsets(joint, fingerTarget.jointPositions?.[i], debug?.bones[joint.name], boneAlpha);
         joint.bone.quaternion.slerp(joint.targetQuaternion, boneAlpha);
       }
     }
 
     hand.armature.updateMatrixWorld(true);
     hand.skeleton.update();
+  }
+
+  private applyJointOffsets(joint: MappedBoneJoint, offset: readonly [number, number, number] | undefined, override: DebugBoneOverride | undefined, alpha: number): void {
+    // The saved calibration belongs to the pose. Inspector edits stay additive,
+    // and leaving a calibrated stage smoothly returns the bone to its rest length.
+    scratchJointPosition.copy(joint.restPosition);
+    if (offset) {
+      scratchJointPosition.x += offset[0];
+      scratchJointPosition.y += offset[1];
+      scratchJointPosition.z += offset[2];
+    }
+    if (override) {
+      scratchJointPosition.x += override.position[0];
+      scratchJointPosition.y += override.position[1];
+      scratchJointPosition.z += override.position[2];
+    }
+    joint.bone.position.lerp(scratchJointPosition, alpha);
+    if (!override) return;
+    scratchEuler.set(override.rotation[0] * DEG2RAD, override.rotation[1] * DEG2RAD, override.rotation[2] * DEG2RAD, "XYZ");
+    scratchDeltaQuat.setFromEuler(scratchEuler);
+    joint.targetQuaternion.multiply(scratchDeltaQuat);
   }
 
   dispose(): void {

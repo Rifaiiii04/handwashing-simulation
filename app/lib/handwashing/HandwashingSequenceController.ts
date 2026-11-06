@@ -1,4 +1,4 @@
-import { shallowReactive } from "vue";
+import { reactive, shallowReactive, watch, type WatchStopHandle } from "vue";
 import * as THREE from "three";
 import { HandAnimationController } from "./HandAnimationController";
 import {
@@ -10,6 +10,11 @@ import {
 } from "./handwashingConfig";
 import type { MappedHandPairRig } from "./handRigMapping";
 import { evaluateStagePose } from "./handwashingPoses";
+import {
+  captureDebugRig, createDebugStageOverride, validateDebugImport,
+  type DebugMetrics, type DebugOverridesExport, type DebugStageOverride,
+  type HandPoseDebugSettings, type HandPoseDebugSnapshot,
+} from "./handPoseDebug";
 
 export interface HandwashingReactiveState {
   stageId: HandwashingStageId;
@@ -47,12 +52,19 @@ export class HandwashingSequenceController {
   readonly totalDuration: number;
   readonly state: HandwashingReactiveState;
   readonly handAnimator: HandAnimationController;
+  readonly debug = reactive<HandPoseDebugSettings>({
+    enabled: false, showSkeleton: false, showAxes: false, hideFoam: true,
+    loopStage: true, playbackRate: 1, selectedSide: "right", selectedBone: "",
+  });
+  readonly debugStages = reactive<Partial<Record<HandwashingStageId, DebugStageOverride>>>({});
 
   private callbacks: HandwashingControllerCallbacks;
   private targetFoamIntensity = 0;
   private isInitialResetState = true;
   private sequenceCompletedNotified = false;
   private stagePoseDirty = true;
+  private debugMetrics: Partial<DebugMetrics> = {};
+  private stopDebugWatch: WatchStopHandle;
 
   constructor(
     config: Partial<HandwashingSystemConfig> = {},
@@ -68,6 +80,9 @@ export class HandwashingSequenceController {
       stages: config.stages ?? DEFAULT_HANDWASHING_CONFIG.stages,
     };
     this.stages = this.config.stages;
+    if (!this.stages.length || this.stages.some((stage) => !Number.isFinite(stage.duration) || stage.duration <= 0)) {
+      throw new Error("Handwashing stages require finite, positive durations.");
+    }
     this.callbacks = callbacks;
     this.handAnimator = new HandAnimationController();
     this.totalDuration = this.stages.reduce((sum, stage) => sum + stage.duration, 0);
@@ -100,6 +115,11 @@ export class HandwashingSequenceController {
     this.state.faucetActive = false;
     this.state.particleMode = "none";
     this.state.particleIntensity = 0;
+    this.stopDebugWatch = watch(
+      [() => this.debug.enabled, () => this.debugStages],
+      () => { this.stagePoseDirty = true; },
+      { deep: true, flush: "sync" },
+    );
   }
 
   /**
@@ -130,6 +150,7 @@ export class HandwashingSequenceController {
         0,
         this.config.poseDampingLambda,
         this.config.boneDampingLambda,
+        this.debug.enabled ? this.debugStages[currentStage.id] : undefined,
       );
     }
     return true;
@@ -160,7 +181,12 @@ export class HandwashingSequenceController {
         this.state.stageIndex === this.stages.length - 1 &&
         this.state.stageProgress >= 0.99
       ) {
-        this.restart(true);
+        if (this.debug.enabled && this.debug.loopStage) {
+          this.seek(0);
+          this.play();
+        } else {
+          this.restart(true);
+        }
       } else {
         this.play();
       }
@@ -173,6 +199,76 @@ export class HandwashingSequenceController {
 
   markPoseDirty(): void {
     this.stagePoseDirty = true;
+  }
+
+  getDebugStage(stageId: HandwashingStageId = this.state.stageId): DebugStageOverride {
+    if (!this.debugStages[stageId]) this.debugStages[stageId] = createDebugStageOverride();
+    return this.debugStages[stageId]!;
+  }
+
+  resetDebugStage(): void {
+    this.debugStages[this.state.stageId] = createDebugStageOverride();
+    this.stagePoseDirty = true;
+    this.update(0);
+  }
+
+  setPlaybackRate(rate: number): void {
+    this.debug.playbackRate = Number.isFinite(rate) ? THREE.MathUtils.clamp(rate, 0.05, 2) : 1;
+  }
+
+  /** Scrubbing pauses and applies the exact pose/effects, without damping lag. */
+  seek(progress: number): void {
+    if (!Number.isFinite(progress)) return;
+    this.isInitialResetState = false;
+    this.sequenceCompletedNotified = false;
+    this.state.isPlaying = false;
+    this.state.stageProgress = THREE.MathUtils.clamp(progress, 0, 1);
+    this.state.stageElapsed = this.state.stageProgress * this.state.stageDuration;
+    this.stagePoseDirty = true;
+    this.updateSequenceProgress();
+    this.update(0);
+  }
+
+  setDebugMetrics(metrics: Partial<DebugMetrics>): void {
+    this.debugMetrics = metrics;
+  }
+
+  getDebugSnapshot(): HandPoseDebugSnapshot {
+    const captured = captureDebugRig(this.getRig(), this.debug);
+    return {
+      stageId: this.state.stageId,
+      progress: this.state.stageProgress,
+      elapsed: this.state.stageElapsed,
+      rigAvailable: Boolean(this.getRig()),
+      hands: captured.hands,
+      selectedBone: captured.selectedBone,
+      diagnostics: {
+        ...captured.diagnostics, ...this.debugMetrics,
+        finiteTransforms: captured.diagnostics.finiteTransforms,
+        warnings: [...captured.diagnostics.warnings, ...(this.debugMetrics.warnings ?? [])],
+      },
+    };
+  }
+
+  exportDebugOverrides(): DebugOverridesExport {
+    return {
+      schemaVersion: 1,
+      units: { handPosition: "world units", bonePosition: "bone local units", rotation: "degrees" },
+      stages: JSON.parse(JSON.stringify(this.debugStages)),
+    };
+  }
+
+  importDebugOverrides(value: unknown): { ok: boolean; error?: string } {
+    try {
+      const imported = validateDebugImport(value, this.stages.map((stage) => stage.id), this.getRig());
+      for (const id of Object.keys(this.debugStages) as HandwashingStageId[]) delete this.debugStages[id];
+      Object.assign(this.debugStages, imported.stages);
+      this.stagePoseDirty = true;
+      this.update(0);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Impor debug gagal." };
+    }
   }
 
   /**
@@ -207,6 +303,7 @@ export class HandwashingSequenceController {
       0,
       this.config.poseDampingLambda,
       this.config.boneDampingLambda,
+      this.debug.enabled ? this.debugStages[this.state.stageId] : undefined,
     );
 
     this.state.isPlaying = autoPlay;
@@ -218,9 +315,10 @@ export class HandwashingSequenceController {
   }
 
   goToStage(stageIdOrIndex: HandwashingStageId | number, autoPlay?: boolean): void {
+    if (typeof stageIdOrIndex === "number" && !Number.isFinite(stageIdOrIndex)) return;
     const nextIndex =
       typeof stageIdOrIndex === "number"
-        ? THREE.MathUtils.clamp(stageIdOrIndex, 0, this.stages.length - 1)
+        ? THREE.MathUtils.clamp(Math.trunc(stageIdOrIndex), 0, this.stages.length - 1)
         : this.stages.findIndex((s) => s.id === stageIdOrIndex);
     if (nextIndex < 0) return;
 
@@ -284,11 +382,7 @@ export class HandwashingSequenceController {
     if (!nextStage.triggersPump) {
       this.state.pumpPressProgress = 0;
     }
-    if (
-      nextStage.id !== "dispenseSoap" &&
-      nextStage.id !== "rubPalms" &&
-      !(nextStage.id === "moveHandsToFaucet" && previousStage?.id === "dispenseSoap")
-    ) {
+    if (nextStage.id !== "rubPalms") {
       this.state.soapBlobVisible = false;
       this.state.soapBlobProgress = 0;
     }
@@ -373,23 +467,9 @@ export class HandwashingSequenceController {
             0,
             1,
           );
-          // 0.65 -> 0.80: dollop safely resting on left palm while hands carry it back to faucet
+          // 0.65 -> 0.80: soap stays on the receiving palm on the way to the rubbing pose.
           this.state.soapBlobProgress = 0.65 + t * 0.15;
         }
-      }
-    } else if (stage.id === "moveHandsToFaucet" && !this.isInitialResetState) {
-      if (progress < 0.85) {
-        // Soap dollop remains visible on left palm while returning under faucet
-        this.state.soapBlobVisible = true;
-        this.state.soapBlobProgress = 0.80;
-      } else if (progress < 0.98) {
-        // Water stream turns on at progress >= 0.85: soap seamlessly dissolves under the flow
-        this.state.soapBlobVisible = true;
-        const washT = THREE.MathUtils.clamp((progress - 0.85) / 0.13, 0, 1);
-        this.state.soapBlobProgress = 0.85 + washT * 0.15;
-      } else {
-        this.state.soapBlobVisible = false;
-        this.state.soapBlobProgress = 0;
       }
     } else if (stage.id === "rubPalms" && progress < 0.16) {
       // Substage A & B (0..0.16): dollop flattens and dissolves into lather as palms meet
@@ -407,27 +487,10 @@ export class HandwashingSequenceController {
 
     let stageFoamTarget: number;
     if (stage.id === "rubPalms") {
-      if (progress <= 0.08) {
-        // Substage A: liquid soap dollop on left palm, minimal initial foam
-        stageFoamTarget = THREE.MathUtils.lerp(0.0, stage.foamStart * 0.5, progress / 0.08);
-      } else if (progress <= 0.16) {
-        // Substage B: palms meet in contact, soap lathers to initial 0.1 coverage
-        stageFoamTarget = THREE.MathUtils.lerp(
-          stage.foamStart * 0.5,
-          stage.foamStart,
-          (progress - 0.08) / 0.08,
-        );
-      } else if (progress <= 0.84) {
-        // Substages C, D, E: 6 circular rubbing cycles ramp foam coverage from 0.1 to 0.8
-        stageFoamTarget = THREE.MathUtils.lerp(
-          stage.foamStart,
-          stage.foamEnd,
-          THREE.MathUtils.smoothstep(progress, 0.16, 0.84),
-        );
-      } else {
-        // Substage F: both palms fully coated with foam (0.80)
-        stageFoamTarget = stage.foamEnd;
-      }
+      // Palms are already joined when this stage begins. Lather grows with
+      // the first circles instead of waiting through another joining phase.
+      stageFoamTarget = THREE.MathUtils.lerp(stage.foamStart, stage.foamEnd,
+        THREE.MathUtils.smoothstep(progress, 0, .65));
     } else {
       stageFoamTarget = THREE.MathUtils.lerp(
         stage.foamStart,
@@ -451,13 +514,13 @@ export class HandwashingSequenceController {
       }
     }
 
-    this.state.particleMode = stage.particleMode;
-    if (stage.id === "rinseHands") {
-      this.state.particleIntensity = stage.particleIntensity;
-    } else if (stage.particleMode === "foam") {
-      this.state.particleIntensity = stage.particleIntensity * Math.max(0.25, this.state.foamIntensity);
-    } else {
-      this.state.particleIntensity = stage.particleIntensity;
+    // The approach has its own delayed water ramp above. Do not overwrite it
+    // with the stage's full emission before the hands reach the faucet.
+    if (stage.id !== "moveHandsToFaucet") {
+      this.state.particleMode = stage.particleMode;
+      this.state.particleIntensity = stage.particleMode === "foam"
+        ? stage.particleIntensity * Math.max(0.25, this.state.foamIntensity)
+        : stage.particleIntensity;
     }
   }
 
@@ -465,34 +528,44 @@ export class HandwashingSequenceController {
    * Advances the timeline and updates skeletal hand & finger poses inside the single render loop.
    */
   update(delta: number): void {
-    const safeDelta = Math.min(Math.max(delta, 0), 0.05);
-    const currentStage = this.getCurrentStage();
+    const safeDelta = Number.isFinite(delta) ? Math.min(Math.max(delta, 0), 0.05) : 0;
+    const playbackRate = this.debug.enabled && Number.isFinite(this.debug.playbackRate)
+      ? THREE.MathUtils.clamp(this.debug.playbackRate, 0.05, 2) : 1;
+    let completedThisFrame = false;
 
     if (this.state.isPlaying) {
-      this.state.stageElapsed += safeDelta;
-      if (this.state.stageElapsed >= currentStage.duration) {
-        if (this.state.stageIndex < this.stages.length - 1) {
+      this.state.stageElapsed += safeDelta * playbackRate;
+      let currentStage = this.getCurrentStage();
+      while (this.state.stageElapsed + 1e-9 >= currentStage.duration) {
+        // Carry the remainder into the next stage so timing does not depend on
+        // whether a stage boundary happens to coincide with a rendered frame.
+        const overflow = Math.max(0, this.state.stageElapsed - currentStage.duration);
+        if (this.debug.enabled && this.debug.loopStage) {
+          this.enterStage(this.state.stageIndex, currentStage, true);
+        } else if (this.state.stageIndex < this.stages.length - 1) {
           this.enterStage(this.state.stageIndex + 1, currentStage, false);
         } else if (this.state.loop) {
           this.enterStage(0, currentStage, true);
         } else {
-          this.state.stageProgress = 1;
           this.state.stageElapsed = currentStage.duration;
           this.state.isPlaying = false;
-          if (!this.sequenceCompletedNotified) {
-            this.sequenceCompletedNotified = true;
-            this.callbacks.onSequenceComplete?.();
-          }
+          completedThisFrame = true;
+          break;
         }
-      } else {
-        this.state.stageProgress = THREE.MathUtils.clamp(
-          this.state.stageElapsed / Math.max(0.001, currentStage.duration),
-          0,
-          1,
-        );
+        this.state.stageElapsed = overflow;
+        currentStage = this.getCurrentStage();
       }
+      this.state.stageProgress = THREE.MathUtils.clamp(
+        this.state.stageElapsed / Math.max(0.001, this.getCurrentStage().duration),
+        0,
+        1,
+      );
       this.updateSequenceProgress();
-    } else if (!this.stagePoseDirty && !this.isInitialResetState) {
+      if (completedThisFrame && !this.sequenceCompletedNotified) {
+        this.sequenceCompletedNotified = true;
+        this.callbacks.onSequenceComplete?.();
+      }
+    } else if (!this.stagePoseDirty) {
       return;
     }
 
@@ -510,15 +583,17 @@ export class HandwashingSequenceController {
     );
     this.handAnimator.applyPose(
       evaluation,
-      this.stagePoseDirty && !this.state.isPlaying ? 0 : safeDelta,
+      completedThisFrame || (this.stagePoseDirty && (!this.state.isPlaying || this.debug.enabled)) ? 0 : safeDelta,
       this.config.poseDampingLambda,
       this.config.boneDampingLambda,
+      this.debug.enabled ? this.debugStages[activeStage.id] : undefined,
     );
     this.stagePoseDirty = false;
   }
 
   dispose(): void {
     this.state.isPlaying = false;
+    this.stopDebugWatch();
     this.handAnimator.dispose();
   }
 }

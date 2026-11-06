@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "units": {
+    "handPosition": "world units",
+    "bonePosition": "bone local units",
+    "rotation": "degrees"
+  },
+  "stages": {
+    "interlaceFingers": {
+      "right": {
+        "position": [-0.014, -0.0075, 0.0205],
+        "rotation": [-5.5, 14, 0],
+        "bones": {
+          "Bone": {
+            "position": [0, 0, 0],
+            "rotation": [0, 0, 0]
+          },
+          "Bone006": {
+            "position": [0, 0, 0],
+            "rotation": [0, 0, -15]
+          },
+          "Bone004": {
+            "position": [0, 0, 0],
+            "rotation": [0, 0, 0]
+          },
+          "Bone003": {
+            "position": [0, 0, 0],
+            "rotation": [0, 0, 0]
+          },
+          "Bone002": {
+            "position": [0, 0, 0],
+            "rotation": [-15, 0, -43]
+          },
+          "Bone017": {
+            "position": [-0.07301691389271865, 0, 0],
+            "rotation": [12.5, 40, -2.5]
+          }
+        }
+      },
+      "left": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {
+          "Bone_1": {
+            "position": [0, 0, 0],
+            "rotation": [0, 0, 0]
+          },
+          "Bone017_1": {
+            "position": [0, 0, 0],
+            "rotation": [0, 7.5, -14.5]
+          },
+          "Bone019_1": {
+            "position": [-0.02433897238176989, 0, 0],
+            "rotation": [-48, 0, 16]
+          }
+        }
+      }
+    },
+    "moveHandsToFaucet": {
+      "right": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      },
+      "left": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      }
+    },
+    "wetHands": {
+      "right": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      },
+      "left": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      }
+    },
+    "dispenseSoap": {
+      "right": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      },
+      "left": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      }
+    },
+    "rubPalms": {
+      "right": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      },
+      "left": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      }
+    },
+    "rubBacksOfHands": {
+      "right": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      },
+      "left": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "bones": {}
+      }
+    }
+  }
+}

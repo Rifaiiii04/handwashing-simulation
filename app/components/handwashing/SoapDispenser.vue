@@ -330,6 +330,7 @@ const effect: WaterEffect = {
     const p = THREE.MathUtils.clamp(frame.soapBlobProgress, 0, 1);
 
     if (p <= 0.65) {
+      soapDropMesh.quaternion.identity();
       // Falling phase (0 -> 0.65): emerges from nozzle tip, stretches an elastic viscous strand, lands on palm
       const fallT = THREE.MathUtils.smoothstep(p / 0.65, 0, 1);
       dropPos.lerpVectors(outletWorld, frame.receivingPalmWorld, fallT);
@@ -364,16 +365,18 @@ const effect: WaterEffect = {
       const settleT = THREE.MathUtils.clamp((p - 0.65) / 0.20, 0, 1);
       soapStrandMesh.visible = false;
       soapDropMesh.position.copy(frame.receivingPalmWorld);
+      soapDropMesh.quaternion.setFromUnitVectors(upAxis, frame.leftPalmNormal);
       // Dollop spreads into a smooth, glossy dome on the skin
       const spread = 1.05 + settleT * 0.25;
       const flatten = 0.75 - settleT * 0.22;
       soapDropMesh.scale.set(spread, flatten, spread);
       soapMaterial.opacity = 0.94;
     } else {
-      // Dissolving phase as water hits the soap under the faucet (0.85 -> 1.0)
+      // Flatten into lather as the opposing palms meet (0.85 -> 1.0).
       const fadeT = THREE.MathUtils.clamp((p - 0.85) / 0.15, 0, 1);
       soapStrandMesh.visible = false;
       soapDropMesh.position.copy(frame.receivingPalmWorld);
+      soapDropMesh.quaternion.setFromUnitVectors(upAxis, frame.leftPalmNormal);
       const shrink = (1.0 - fadeT * 0.60) * 1.25;
       soapDropMesh.scale.set(shrink, shrink * 0.45, shrink);
       soapMaterial.opacity = 0.94 * (1.0 - fadeT);

@@ -26,11 +26,11 @@ interface FoamBubble {
   size: number;
 }
 
-// Cohesive toon-style white/cyan soap foam appearance kept subtle so hand motion stays clear
+// Dense white lather remains readable around the contacting palm edges.
 const baseFoamOpacity = THREE.MathUtils.clamp(
-  Math.min(runtime.config.foamOpacity, 0.42),
+  Math.min(runtime.config.foamOpacity, 0.88),
   0.18,
-  0.45,
+  0.88,
 );
 const foamCyanColor = new THREE.Color(0x9cecff);
 const foamMaterial = createWaterMaterial(
@@ -51,6 +51,16 @@ foamPuffs.count = foamPuffCount;
 foamPuffs.frustumCulled = false;
 foamPuffs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 
+// Retain the palmar lather while soap spreads onto each back during step 2.
+// A separate, shared-resource layer fades in on the dorsal skin; foam never
+// travels through the hand when its surface normal changes sides.
+const dorsalFoamPuffs = new THREE.InstancedMesh(foamPuffGeometry, foamMaterial, foamPuffCount);
+dorsalFoamPuffs.name = "HandDorsalFoamPuffCluster";
+dorsalFoamPuffs.frustumCulled = false;
+dorsalFoamPuffs.visible = false;
+dorsalFoamPuffs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+const palmSurfaceOffset = 0.072;
+
 const instanceMatrix = new THREE.Matrix4();
 const instanceColor = new THREE.Color();
 const foamWhiteTint = new THREE.Color(0xfaffff);
@@ -58,6 +68,7 @@ const foamCyanTint = new THREE.Color(0x88e8ff);
 const scratchPosition = new THREE.Vector3();
 const scratchScale = new THREE.Vector3();
 const scratchQuat = new THREE.Quaternion();
+const scratchDorsalNormal = new THREE.Vector3();
 const identityQuat = new THREE.Quaternion();
 const upAxis = new THREE.Vector3(0, 1, 0);
 const fallbackRef = new THREE.Vector3(0, 0, -1);
@@ -120,8 +131,10 @@ for (let index = 0; index < foamPuffPool.length; index++) {
   );
   instanceColor.copy(foamWhiteTint).lerp(foamCyanTint, cyanAmount);
   foamPuffs.setColorAt(index, instanceColor);
+  dorsalFoamPuffs.setColorAt(index, instanceColor);
 }
 if (foamPuffs.instanceColor) foamPuffs.instanceColor.needsUpdate = true;
+if (dorsalFoamPuffs.instanceColor) dorsalFoamPuffs.instanceColor.needsUpdate = true;
 
 const bubbleCount = THREE.MathUtils.clamp(Math.floor(runtime.config.foamBubbleCount), 10, 24);
 const bubbleGeometry = new THREE.SphereGeometry(0.0085, 12, 10);
@@ -138,7 +151,7 @@ bubbles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 
 const object = new THREE.Group();
 object.name = "HandFoamEffect";
-object.add(foamPuffs, bubbles);
+object.add(foamPuffs, dorsalFoamPuffs, bubbles);
 
 const bubblePool: FoamBubble[] = Array.from({ length: bubbleCount }, (_, index) => ({
   side: index % 2 === 0 ? "left" : "right",
@@ -170,8 +183,8 @@ function buildPalmBasis(
   const ref = Math.abs(outNormal.dot(fallbackRef)) < 0.9 ? fallbackRef : fallbackAlt;
   outU.crossVectors(outNormal, ref).normalize();
   outV.crossVectors(outNormal, outU).normalize();
-  // Offset above the skeletal palm centerline so foam sits right on the palmar skin surface
-  outOrigin.copy(palmWorld).addScaledVector(outNormal, 0.016);
+  // The corrected anatomical center lies about 70 mm below this GLB's palm skin.
+  outOrigin.copy(palmWorld).addScaledVector(outNormal, palmSurfaceOffset);
 }
 
 function respawnBubble(bubble: FoamBubble, index: number, initial = false): void {
@@ -209,6 +222,7 @@ let previousMaterial: THREE.Material | THREE.Material[] | null = null;
 let previousVisibility: boolean | null = null;
 let rebuildAccumulator = waveInterval;
 let lastResetToken = -1;
+let lastFoamStage = "";
 
 function detachAnchor(): void {
   if (attachedMesh) {
@@ -227,6 +241,18 @@ function updateFoamPuffs(frame: WaterFrameState, intensity: number): void {
     Math.ceil(foamPuffPool.length * THREE.MathUtils.smoothstep(clampedIntensity, 0.0, 0.85)),
   );
   foamPuffs.count = activeCount;
+  const isBacksStage = frame.stageId === "rubBacksOfHands";
+  const keepDorsalLather = frame.stageId === "interlaceFingers";
+  const palmEdgeLather = frame.stageId === "rubPalms"
+    ? .85 * THREE.MathUtils.smoothstep(clampedIntensity, .12, .65) : 0;
+  const leftDorsalCoverage = keepDorsalLather ? 1 : isBacksStage
+    ? THREE.MathUtils.smoothstep(frame.stageProgress, 0.14, 0.29)
+    : 0;
+  const rightDorsalCoverage = keepDorsalLather ? 1 : isBacksStage
+    ? THREE.MathUtils.smoothstep(frame.stageProgress, 0.59, 0.74)
+    : palmEdgeLather;
+  dorsalFoamPuffs.visible = leftDorsalCoverage > 0 || rightDorsalCoverage > 0;
+  dorsalFoamPuffs.count = activeCount;
 
   buildPalmBasis(
     frame.leftPalmWorld,
@@ -246,10 +272,10 @@ function updateFoamPuffs(frame: WaterFrameState, intensity: number): void {
   );
 
   // Tangential spread across each palm surface (from ~28mm early to ~62mm when fully lathered)
-  const palmRadiusU = 0.028 + clampedIntensity * 0.036;
-  const palmRadiusV = 0.024 + clampedIntensity * 0.030;
-  const normalThickness = 0.008 + clampedIntensity * 0.008;
-  const sizeEnvelope = 0.55 + Math.sqrt(clampedIntensity) * 0.65;
+  const palmRadiusU = 0.045 + clampedIntensity * 0.115;
+  const palmRadiusV = 0.040 + clampedIntensity * 0.145;
+  const normalThickness = 0.010 + clampedIntensity * 0.012;
+  const sizeEnvelope = 0.75 + Math.sqrt(clampedIntensity) * 1.10;
   const time = frame.time;
 
   for (let index = 0; index < activeCount; index++) {
@@ -284,11 +310,30 @@ function updateFoamPuffs(frame: WaterFrameState, intensity: number): void {
     const radius = Math.max(0.0005, puff.size * pulse * sizeEnvelope * localGrowth);
     scratchQuat.setFromUnitVectors(upAxis, normal);
     // Flatten puff slightly along the palm normal so foam hugs the palm surface naturally
-    scratchScale.set(radius * 1.15, radius * 0.52, radius * 1.15);
+    scratchScale.set(radius * 1.15, radius * 0.85, radius * 1.15);
     instanceMatrix.compose(scratchPosition, scratchQuat, scratchScale);
     foamPuffs.setMatrixAt(index, instanceMatrix);
+
+    if (dorsalFoamPuffs.visible) {
+      // Lather squeezed out of palm contact wraps around the outer edges.
+      // Keep the center of each back clear until the dorsum-rubbing technique.
+      const edgeMask = isBacksStage || keepDorsalLather || puff.radialOrder > .48 ? 1 : 0;
+      const coverage = (isLeft ? leftDorsalCoverage : rightDorsalCoverage) * edgeMask;
+      const palmCenter = isLeft ? frame.leftPalmWorld : frame.rightPalmWorld;
+      scratchDorsalNormal.copy(normal).negate();
+      scratchPosition
+        .copy(palmCenter)
+        .addScaledVector(scratchDorsalNormal, palmSurfaceOffset + offsetN)
+        .addScaledVector(tangentU, offsetU)
+        .addScaledVector(tangentV, offsetV);
+      scratchQuat.setFromUnitVectors(upAxis, scratchDorsalNormal);
+      scratchScale.multiplyScalar(coverage * 0.85);
+      instanceMatrix.compose(scratchPosition, scratchQuat, scratchScale);
+      dorsalFoamPuffs.setMatrixAt(index, instanceMatrix);
+    }
   }
   foamPuffs.instanceMatrix.needsUpdate = true;
+  if (dorsalFoamPuffs.visible) dorsalFoamPuffs.instanceMatrix.needsUpdate = true;
 }
 
 function updateBubbles(delta: number, intensity: number): void {
@@ -353,6 +398,7 @@ const effect: WaterEffect = {
 
     if (frame.resetToken !== lastResetToken) {
       lastResetToken = frame.resetToken;
+      rebuildAccumulator = waveInterval;
       for (let index = 0; index < bubblePool.length; index++) {
         respawnBubble(bubblePool[index]!, index, true);
       }
@@ -369,6 +415,10 @@ const effect: WaterEffect = {
 
     updateWaterMaterial(foamMaterial, frame.time);
     updateWaterMaterial(bubbleMaterial, frame.time);
+    if (lastFoamStage !== frame.stageId) {
+      lastFoamStage = frame.stageId;
+      rebuildAccumulator = waveInterval;
+    }
     rebuildAccumulator += frame.delta;
     if (rebuildAccumulator >= waveInterval) {
       rebuildAccumulator %= waveInterval;
@@ -378,6 +428,9 @@ const effect: WaterEffect = {
   },
   dispose() {
     detachAnchor();
+    foamPuffs.dispose();
+    dorsalFoamPuffs.dispose();
+    bubbles.dispose();
     foamPuffGeometry.dispose();
     bubbleGeometry.dispose();
     disposeWaterMaterial(bubbleMaterial);

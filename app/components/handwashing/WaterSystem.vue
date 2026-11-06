@@ -44,6 +44,8 @@ const foamBounds = new THREE.Box3();
 const defaultFoamWorldCenter = new THREE.Vector3();
 
 const frame: WaterFrameState = {
+  stageId: sequenceController.state.stageId,
+  stageProgress: 0,
   ready: false,
   active: true,
   streamActive: false,
@@ -297,7 +299,10 @@ onBeforeRender(({ delta }) => {
   const handRig = sequenceController.getRig();
 
   frame.streamActive = seqState.faucetActive;
-  frame.foamIntensity = seqState.foamIntensity;
+  frame.stageId = seqState.stageId;
+  frame.stageProgress = seqState.stageProgress;
+  frame.foamIntensity = sequenceController.debug.enabled && sequenceController.debug.hideFoam
+    ? 0 : seqState.foamIntensity;
   frame.particleMode = seqState.particleMode;
   frame.particleIntensity = seqState.particleIntensity;
   frame.pumpPressProgress = seqState.pumpPressProgress;
@@ -342,10 +347,15 @@ onBeforeRender(({ delta }) => {
     );
     frame.handsIntersectingStream = frame.handContactFactor > 0.01;
 
-    // Top surface of the cupped hands under the vertical spout
+    // Follow the corrected skeletal palm anchors. This is a broad palm-surface
+    // approximation; the detailed water system still handles runoff downstream.
+    const wetSurfaceY = Math.max(
+      frame.rightPalmWorld.y + Math.abs(frame.rightPalmNormal.y) * 0.072,
+      frame.leftPalmWorld.y + Math.abs(frame.leftPalmNormal.y) * 0.072,
+    );
     frame.handImpactPoint.set(
       frame.origin.x,
-      frame.foamWorldCenter.y + 0.038,
+      wetSurfaceY,
       frame.origin.z,
     );
 

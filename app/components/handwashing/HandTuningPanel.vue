@@ -1,1595 +1,246 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
-import {
-  rubPalmsLiveTuning,
-  updateRubPalmsTuning,
-  resetRubPalmsTuning,
-  DEFAULT_RUB_PALMS_TUNING,
-  type RubPalmsLiveTuning,
-} from '~/lib/handwashing/handwashingPoses'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import * as THREE from 'three'
 import type { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
+import type { HandwashingStageId } from '~/lib/handwashing/handwashingConfig'
 
-const props = defineProps<{
-  controller: HandwashingSequenceController
-}>()
-
+const props = defineProps<{ controller: HandwashingSequenceController }>()
+const controller = props.controller
+const state = controller.state
+const debug = controller.debug
 const isOpen = ref(true)
-const isCopied = ref(false)
-const loopStage4Only = ref(false)
+const activeTab = ref<'hand' | 'bone' | 'diagnostics' | 'json'>('hand')
+const tabs = [{ id: 'hand', label: 'Tangan' }, { id: 'bone', label: 'Bone' }, { id: 'diagnostics', label: 'Diagnostik' }, { id: 'json', label: 'JSON' }] as const
+const axes = ['X', 'Y', 'Z'] as const
+const snapshot = shallowRef<ReturnType<HandwashingSequenceController['getDebugSnapshot']> | null>(null)
+const jsonText = ref('')
+const feedback = ref('')
+const feedbackError = ref(false)
+const localPositionScale = ref<[number, number, number]>([1, 1, 1])
+const scratchScale = new THREE.Vector3()
+const storageKey = 'bapelkes-hand-debug-v1'
+let refreshTimer: ReturnType<typeof setInterval> | undefined
 
-type MainTab = 'rightHand' | 'leftHand' | 'rightFingers' | 'leftFingers' | 'code'
-type FingerKey = 'thumb' | 'index' | 'middle' | 'ring' | 'pinky'
-type ThumbJointKey = 'all' | 'base' | 'mid' | 'tip'
-
-const activeTab = ref<MainTab>('rightFingers')
-const activeRightFinger = ref<FingerKey | 'all'>('thumb')
-const activeLeftFinger = ref<FingerKey | 'all'>('thumb')
-const activeRightThumbJoint = ref<ThumbJointKey>('all')
-const activeLeftThumbJoint = ref<ThumbJointKey>('all')
-
-const fingerList: { key: FingerKey; label: string; icon: string }[] = [
-  { key: 'thumb', label: 'Jempol', icon: '👍' },
-  { key: 'index', label: 'Telunjuk', icon: '☝️' },
-  { key: 'middle', label: 'Tengah', icon: '🖕' },
-  { key: 'ring', label: 'Manis', icon: '💍' },
-  { key: 'pinky', label: 'Kelingking', icon: '🤙' },
-]
-
-// Reactive local copy synced with live tuning
-const tuning = reactive<RubPalmsLiveTuning>({
-  rightOffsetY: rubPalmsLiveTuning.rightOffsetY,
-  rightOffsetZ: rubPalmsLiveTuning.rightOffsetZ,
-  rightOffsetX: rubPalmsLiveTuning.rightOffsetX,
-  rightPitch: rubPalmsLiveTuning.rightPitch,
-  rightYaw: rubPalmsLiveTuning.rightYaw,
-  rightRoll: rubPalmsLiveTuning.rightRoll,
-
-  leftOffsetY: rubPalmsLiveTuning.leftOffsetY,
-  leftOffsetZ: rubPalmsLiveTuning.leftOffsetZ,
-  leftOffsetX: rubPalmsLiveTuning.leftOffsetX,
-  leftPitch: rubPalmsLiveTuning.leftPitch,
-  leftYaw: rubPalmsLiveTuning.leftYaw,
-  leftRoll: rubPalmsLiveTuning.leftRoll,
-
-  rightThumbCurl: rubPalmsLiveTuning.rightThumbCurl,
-  rightThumbSpread: rubPalmsLiveTuning.rightThumbSpread,
-  rightThumbTwist: rubPalmsLiveTuning.rightThumbTwist,
-  rightIndexCurl: rubPalmsLiveTuning.rightIndexCurl,
-  rightIndexSpread: rubPalmsLiveTuning.rightIndexSpread,
-  rightIndexTwist: rubPalmsLiveTuning.rightIndexTwist,
-  rightMiddleCurl: rubPalmsLiveTuning.rightMiddleCurl,
-  rightMiddleSpread: rubPalmsLiveTuning.rightMiddleSpread,
-  rightMiddleTwist: rubPalmsLiveTuning.rightMiddleTwist,
-  rightRingCurl: rubPalmsLiveTuning.rightRingCurl,
-  rightRingSpread: rubPalmsLiveTuning.rightRingSpread,
-  rightRingTwist: rubPalmsLiveTuning.rightRingTwist,
-  rightPinkyCurl: rubPalmsLiveTuning.rightPinkyCurl,
-  rightPinkySpread: rubPalmsLiveTuning.rightPinkySpread,
-  rightPinkyTwist: rubPalmsLiveTuning.rightPinkyTwist,
-
-  leftThumbCurl: rubPalmsLiveTuning.leftThumbCurl,
-  leftThumbSpread: rubPalmsLiveTuning.leftThumbSpread,
-  leftThumbTwist: rubPalmsLiveTuning.leftThumbTwist,
-  leftIndexCurl: rubPalmsLiveTuning.leftIndexCurl,
-  leftIndexSpread: rubPalmsLiveTuning.leftIndexSpread,
-  leftIndexTwist: rubPalmsLiveTuning.leftIndexTwist,
-  leftMiddleCurl: rubPalmsLiveTuning.leftMiddleCurl,
-  leftMiddleSpread: rubPalmsLiveTuning.leftMiddleSpread,
-  leftMiddleTwist: rubPalmsLiveTuning.leftMiddleTwist,
-  leftRingCurl: rubPalmsLiveTuning.leftRingCurl,
-  leftRingSpread: rubPalmsLiveTuning.leftRingSpread,
-  leftRingTwist: rubPalmsLiveTuning.leftRingTwist,
-  leftPinkyCurl: rubPalmsLiveTuning.leftPinkyCurl,
-  leftPinkySpread: rubPalmsLiveTuning.leftPinkySpread,
-  leftPinkyTwist: rubPalmsLiveTuning.leftPinkyTwist,
-
-  // Right Thumb Per-Joint Bones
-  rightThumbBaseCurl: rubPalmsLiveTuning.rightThumbBaseCurl,
-  rightThumbBaseSpread: rubPalmsLiveTuning.rightThumbBaseSpread,
-  rightThumbBaseTwist: rubPalmsLiveTuning.rightThumbBaseTwist,
-  rightThumbMidCurl: rubPalmsLiveTuning.rightThumbMidCurl,
-  rightThumbMidSpread: rubPalmsLiveTuning.rightThumbMidSpread,
-  rightThumbMidTwist: rubPalmsLiveTuning.rightThumbMidTwist,
-  rightThumbTipCurl: rubPalmsLiveTuning.rightThumbTipCurl,
-  rightThumbTipSpread: rubPalmsLiveTuning.rightThumbTipSpread,
-  rightThumbTipTwist: rubPalmsLiveTuning.rightThumbTipTwist,
-
-  // Left Thumb Per-Joint Bones
-  leftThumbBaseCurl: rubPalmsLiveTuning.leftThumbBaseCurl,
-  leftThumbBaseSpread: rubPalmsLiveTuning.leftThumbBaseSpread,
-  leftThumbBaseTwist: rubPalmsLiveTuning.leftThumbBaseTwist,
-  leftThumbMidCurl: rubPalmsLiveTuning.leftThumbMidCurl,
-  leftThumbMidSpread: rubPalmsLiveTuning.leftThumbMidSpread,
-  leftThumbMidTwist: rubPalmsLiveTuning.leftThumbMidTwist,
-  leftThumbTipCurl: rubPalmsLiveTuning.leftThumbTipCurl,
-  leftThumbTipSpread: rubPalmsLiveTuning.leftThumbTipSpread,
-  leftThumbTipTwist: rubPalmsLiveTuning.leftThumbTipTwist,
-})
-
-function applyChange() {
-  updateRubPalmsTuning(tuning)
-  props.controller.markPoseDirty()
-}
-
-function adjustMm(key: 'rightOffsetX' | 'rightOffsetY' | 'rightOffsetZ' | 'leftOffsetX' | 'leftOffsetY' | 'leftOffsetZ', deltaMm: number) {
-  tuning[key] = Math.round((tuning[key] + deltaMm / 1000) * 10000) / 10000
-  applyChange()
-}
-
-function adjustDeg(key: keyof RubPalmsLiveTuning, deltaDeg: number, decimals = 1) {
-  tuning[key] = Math.round((tuning[key] + deltaDeg) * Math.pow(10, decimals)) / Math.pow(10, decimals)
-  applyChange()
-}
-
-function applyRightThumbNatural() {
-  tuning.rightThumbBaseCurl = -25.0
-  tuning.rightThumbBaseSpread = 11.0
-  tuning.rightThumbBaseTwist = 2.5
-  tuning.rightThumbMidCurl = 0.5
-  tuning.rightThumbMidSpread = -16.0
-  tuning.rightThumbMidTwist = 38.5
-  tuning.rightThumbTipCurl = 13.0
-  tuning.rightThumbTipSpread = -5.0
-  tuning.rightThumbTipTwist = -8.5
-  applyChange()
-}
-
-function applyRightThumbOpenWide() {
-  tuning.rightThumbBaseCurl = -25.0
-  tuning.rightThumbBaseSpread = 25.0
-  tuning.rightThumbBaseTwist = 2.5
-  tuning.rightThumbMidCurl = 5.0
-  tuning.rightThumbMidSpread = 5.0
-  tuning.rightThumbMidTwist = -10.0
-  tuning.rightThumbTipCurl = 10.0
-  tuning.rightThumbTipSpread = -5.0
-  tuning.rightThumbTipTwist = -8.5
-  applyChange()
-}
-
-function applyLeftThumbNatural() {
-  tuning.leftThumbBaseCurl = 10.5
-  tuning.leftThumbBaseSpread = 8.0
-  tuning.leftThumbBaseTwist = 40.0
-  tuning.leftThumbMidCurl = 14.5
-  tuning.leftThumbMidSpread = 20.0
-  tuning.leftThumbMidTwist = 19.0
-  tuning.leftThumbTipCurl = 4.0
-  tuning.leftThumbTipSpread = 10.0
-  tuning.leftThumbTipTwist = 0.0
-  applyChange()
-}
-
-function doReset() {
-  resetRubPalmsTuning()
-  Object.assign(tuning, DEFAULT_RUB_PALMS_TUNING)
-  applyChange()
-}
-
-function jumpToStage4() {
-  props.controller.goToStage(3, true)
-}
-
-// Keep Stage 4 looping if enabled
-watch(
-  () => [props.controller.state.stageProgress, props.controller.state.stageIndex, loopStage4Only.value],
-  ([prog, idx, loop]) => {
-    if (loop && idx === 3 && typeof prog === 'number' && prog >= 0.98) {
-      props.controller.goToStage(3, true)
+const selectedHand = computed(() => controller.getDebugStage(state.stageId)[debug.selectedSide])
+const boneNames = computed(() => snapshot.value?.hands?.[debug.selectedSide].boneNames ?? [])
+const boneOptions = computed(() => {
+  const hand = controller.getRig()?.[debug.selectedSide]
+  const labels: Record<string, string> = {}
+  if (hand) {
+    labels[hand.wristJoint.name] = 'Pergelangan'
+    const fingerLabels = { thumb: 'Jempol', index: 'Telunjuk', middle: 'Tengah', ring: 'Manis', pinky: 'Kelingking' } as const
+    for (const finger of Object.keys(fingerLabels) as Array<keyof typeof fingerLabels>) {
+      const joints = finger === 'thumb' ? ['Pangkal', 'Tengah', 'Ujung'] : ['Metakarpal', 'MCP', 'PIP', 'DIP']
+      hand.fingers[finger].joints.forEach((joint, index) => {
+        labels[joint.name] = `${fingerLabels[finger]} · ${joints[index] ?? `Sendi ${index + 1}`}`
+      })
     }
   }
-)
-
-const formattedCode = computed(() => {
+  return boneNames.value.map(name => ({ name, label: labels[name] ? `${labels[name]} (${name})` : name }))
+})
+const selectedBone = computed(() => {
+  const name = debug.selectedBone
+  if (!name || !boneNames.value.includes(name)) return null
+  const hand = selectedHand.value
+  if (!hand.bones[name]) hand.bones[name] = { position: [0, 0, 0], rotation: [0, 0, 0] }
+  return hand.bones[name]!
+})
+const editableTransform = computed(() => activeTab.value === 'bone' ? selectedBone.value : selectedHand.value)
+const actualTransform = computed(() => {
+  const hand = snapshot.value?.hands?.[debug.selectedSide]
+  return activeTab.value === 'bone' ? hand?.bones.find(bone => bone.name === debug.selectedBone) : hand?.armature
+})
+const currentValues = computed(() => {
+  const transform = actualTransform.value
+  if (!transform) return []
   return [
-    `// Nilai Kalibrasi Hasil Tuning Gosok Telapak (WHO Tahap 4):`,
-    `// --- Posisi & Rotasi Tangan Kanan ---`,
-    `CONTACT_RIGHT_BASE_OFF: [${tuning.rightOffsetX.toFixed(4)}, ${tuning.rightOffsetY.toFixed(4)}, ${tuning.rightOffsetZ.toFixed(4)}],`,
-    `CONTACT_RIGHT_BASE_EULER: [${tuning.rightPitch}, ${tuning.rightYaw}, ${tuning.rightRoll}],`,
-    ``,
-    `// --- Posisi & Rotasi Tangan Kiri ---`,
-    `CONTACT_LEFT_BASE_OFF: [${tuning.leftOffsetX.toFixed(4)}, ${tuning.leftOffsetY.toFixed(4)}, ${tuning.leftOffsetZ.toFixed(4)}],`,
-    `CONTACT_LEFT_BASE_EULER: [${tuning.leftPitch}, ${tuning.leftYaw}, ${tuning.leftRoll}],`,
-    ``,
-    `// --- Artikulasi Jempol Kanan Per-Bone (Sendi 1, 2, 3) ---`,
-    `rightThumbBase: { curl: ${tuning.rightThumbBaseCurl.toFixed(1)}, spread: ${tuning.rightThumbBaseSpread.toFixed(1)}, twist: ${tuning.rightThumbBaseTwist.toFixed(1)} }, // Bone.017 (Pangkal)`,
-    `rightThumbMid:  { curl: ${tuning.rightThumbMidCurl.toFixed(1)}, spread: ${tuning.rightThumbMidSpread.toFixed(1)}, twist: ${tuning.rightThumbMidTwist.toFixed(1)} }, // Bone.018 (Tengah)`,
-    `rightThumbTip:  { curl: ${tuning.rightThumbTipCurl.toFixed(1)}, spread: ${tuning.rightThumbTipSpread.toFixed(1)}, twist: ${tuning.rightThumbTipTwist.toFixed(1)} }, // Bone.019 (Ujung)`,
-    ``,
-    `// --- Artikulasi Jari Tangan Kanan Lainnya ---`,
-    `rightIndex:  { curl: ${tuning.rightIndexCurl.toFixed(1)}, spread: ${tuning.rightIndexSpread.toFixed(1)}, twist: ${tuning.rightIndexTwist.toFixed(1)} },`,
-    `rightMiddle: { curl: ${tuning.rightMiddleCurl.toFixed(1)}, spread: ${tuning.rightMiddleSpread.toFixed(1)}, twist: ${tuning.rightMiddleTwist.toFixed(1)} },`,
-    `rightRing:   { curl: ${tuning.rightRingCurl.toFixed(1)}, spread: ${tuning.rightRingSpread.toFixed(1)}, twist: ${tuning.rightRingTwist.toFixed(1)} },`,
-    `rightPinky:  { curl: ${tuning.rightPinkyCurl.toFixed(1)}, spread: ${tuning.rightPinkySpread.toFixed(1)}, twist: ${tuning.rightPinkyTwist.toFixed(1)} },`,
-    ``,
-    `// --- Artikulasi Jempol Kiri Per-Bone (Sendi 1, 2, 3) ---`,
-    `leftThumbBase:  { curl: ${tuning.leftThumbBaseCurl.toFixed(1)}, spread: ${tuning.leftThumbBaseSpread.toFixed(1)}, twist: ${tuning.leftThumbBaseTwist.toFixed(1)} }, // Bone.017 (Pangkal)`,
-    `leftThumbMid:   { curl: ${tuning.leftThumbMidCurl.toFixed(1)}, spread: ${tuning.leftThumbMidSpread.toFixed(1)}, twist: ${tuning.leftThumbMidTwist.toFixed(1)} }, // Bone.018 (Tengah)`,
-    `leftThumbTip:   { curl: ${tuning.leftThumbTipCurl.toFixed(1)}, spread: ${tuning.leftThumbTipSpread.toFixed(1)}, twist: ${tuning.leftThumbTipTwist.toFixed(1)} }, // Bone.019 (Ujung)`,
-    ``,
-    `// --- Artikulasi Jari Tangan Kiri Lainnya ---`,
-    `leftIndex:   { curl: ${tuning.leftIndexCurl.toFixed(1)}, spread: ${tuning.leftIndexSpread.toFixed(1)}, twist: ${tuning.leftIndexTwist.toFixed(1)} },`,
-    `leftMiddle:  { curl: ${tuning.leftMiddleCurl.toFixed(1)}, spread: ${tuning.leftMiddleSpread.toFixed(1)}, twist: ${tuning.leftMiddleTwist.toFixed(1)} },`,
-    `leftRing:    { curl: ${tuning.leftRingCurl.toFixed(1)}, spread: ${tuning.leftRingSpread.toFixed(1)}, twist: ${tuning.leftRingTwist.toFixed(1)} },`,
-    `leftPinky:   { curl: ${tuning.leftPinkyCurl.toFixed(1)}, spread: ${tuning.leftPinkySpread.toFixed(1)}, twist: ${tuning.leftPinkyTwist.toFixed(1)} },`,
-  ].join('\n')
+    { label: 'Posisi dunia (mm)', values: transform.worldPosition.map(value => (value * 1000).toFixed(2)) },
+    { label: 'Rotasi dunia XYZ (deg)', values: transform.worldRotation.map(value => value.toFixed(2)) },
+    { label: 'Posisi lokal (unit GLB)', values: transform.localPosition.map(value => value.toFixed(4)) },
+    { label: 'Rotasi lokal XYZ (deg)', values: transform.localRotation.map(value => value.toFixed(2)) },
+  ]
 })
 
-async function copyValues() {
-  try {
-    await navigator.clipboard.writeText(formattedCode.value)
-    isCopied.value = true
-    setTimeout(() => {
-      isCopied.value = false
-    }, 2500)
-  } catch (e) {
-    console.error('Failed to copy to clipboard', e)
+function refreshSnapshot() {
+  if (!isOpen.value) return
+  snapshot.value = controller.getDebugSnapshot()
+  const bone = controller.getRig()?.[debug.selectedSide].skeleton.bones.find(item => item.name === debug.selectedBone)
+  if (bone?.parent) {
+    bone.parent.getWorldScale(scratchScale)
+    localPositionScale.value = [Math.abs(scratchScale.x), Math.abs(scratchScale.y), Math.abs(scratchScale.z)]
   }
 }
+function announce(message: string, error = false) { feedback.value = message; feedbackError.value = error }
+function metric(value: number | null | undefined, factor = 1): string {
+  return value == null || !Number.isFinite(value) ? 'Belum tersedia' : (value * factor).toFixed(2)
+}
+function markChanged() { controller.markPoseDirty() }
+function positionFactor(axis: number): number {
+  return activeTab.value === 'bone' ? Math.max(1e-8, localPositionScale.value[axis]!) * 1000 : 1000
+}
+function displayedDelta(kind: 'position' | 'rotation', axis: number): number {
+  return Number(((editableTransform.value?.[kind][axis] ?? 0) * (kind === 'position' ? positionFactor(axis) : 1)).toFixed(4))
+}
+function updateDelta(kind: 'position' | 'rotation', axis: number, event: Event) {
+  const input = event.target as HTMLInputElement
+  if (!input.value.trim()) return
+  const value = Number(input.value)
+  const target = editableTransform.value
+  if (!target || !Number.isFinite(value)) return
+  target[kind][axis] = value / (kind === 'position' ? positionFactor(axis) : 1)
+  markChanged()
+}
+function selectStage(event: Event) {
+  const stageId = (event.target as HTMLSelectElement).value as HandwashingStageId
+  if (!controller.stages.some(stage => stage.id === stageId)) return
+  controller.goToStage(stageId, false)
+  controller.seek(['rubPalms', 'rubBacksOfHands', 'interlaceFingers'].includes(stageId) ? 0.35 : 0)
+  refreshSnapshot()
+}
+function seekPercent(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (!input.value.trim()) return
+  const value = Number(input.value)
+  if (!Number.isFinite(value)) return
+  controller.pause()
+  controller.seek(Math.min(100, Math.max(0, value)) / 100)
+  refreshSnapshot()
+}
+function resetSelected() {
+  const target = activeTab.value === 'bone' ? selectedBone.value : selectedHand.value
+  if (!target) return
+  target.position = [0, 0, 0]
+  target.rotation = [0, 0, 0]
+  markChanged()
+  announce(activeTab.value === 'bone' ? 'Offset bone terpilih diatur ke nol.' : 'Offset tangan diatur ke nol; offset bone tetap tersimpan.')
+}
+function resetStage() { controller.resetDebugStage(); markChanged(); announce('Semua offset tangan dan bone pada tahap ini diatur ke nol.') }
+function allStageOverrides() {
+  for (const stage of controller.stages) controller.getDebugStage(stage.id)
+  return controller.exportDebugOverrides()
+}
+function exportJson() {
+  jsonText.value = JSON.stringify(allStageOverrides(), null, 2)
+  announce('JSON seluruh tahap siap disalin. Posisi tangan: dunia; posisi bone: unit lokal GLB.')
+}
+function importJson(text = jsonText.value): boolean {
+  try {
+    const result = controller.importDebugOverrides(JSON.parse(text))
+    if (!result.ok) { announce(result.error ?? 'JSON tidak valid.', true); return false }
+    debug.enabled = true
+    markChanged()
+    refreshSnapshot()
+    announce('Offset berhasil dimuat. Angka di luar rentang saran tetap dipertahankan.')
+    return true
+  } catch (error) { announce(error instanceof Error ? error.message : 'JSON tidak dapat dibaca.', true); return false }
+}
+async function copyJson() {
+  exportJson()
+  try { await navigator.clipboard.writeText(jsonText.value); announce('JSON seluruh tahap disalin ke clipboard.') }
+  catch { announce('Clipboard tidak tersedia. Salin teks JSON secara manual.', true) }
+}
+function saveLocal() {
+  try { localStorage.setItem(storageKey, JSON.stringify(allStageOverrides())); announce('Kalibrasi disimpan di browser ini. Muat lewat tombol Muat Lokal.') }
+  catch { announce('Browser tidak mengizinkan penyimpanan lokal.', true) }
+}
+function loadLocal() {
+  try {
+    const saved = localStorage.getItem(storageKey)
+    if (!saved) return announce('Belum ada kalibrasi tersimpan di browser ini.', true)
+    if (importJson(saved)) jsonText.value = saved
+  } catch { announce('Penyimpanan lokal tidak dapat dibaca.', true) }
+}
+// Choose a fallback only when the selected hand or rig availability changes.
+// Inspector polling must never change the user's bone selection.
+watch([() => debug.selectedSide, () => snapshot.value?.rigAvailable], () => {
+  const names = boneNames.value
+  if (!names.includes(debug.selectedBone)) debug.selectedBone = names[0] ?? ''
+})
+watch(() => [debug.selectedSide, debug.selectedBone, state.stageId], refreshSnapshot)
+watch(() => debug.enabled, markChanged)
+watch(isOpen, open => {
+  debug.enabled = open
+  markChanged()
+  if (open) refreshSnapshot()
+})
+onMounted(() => {
+  debug.enabled = true
+  controller.pause()
+  markChanged()
+  refreshSnapshot()
+  refreshTimer = setInterval(refreshSnapshot, 100)
+})
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+  debug.enabled = false
+  markChanged()
+})
 </script>
 
 <template>
-  <div class="fixed top-4 right-4 z-50 flex flex-col items-end gap-2 font-sans select-none pointer-events-auto">
-    <!-- Floating Toggle Button -->
-    <button
-      type="button"
-      class="flex items-center gap-2 rounded-xl border border-sky-500/50 bg-slate-900/90 px-3.5 py-2 text-xs font-semibold text-sky-300 shadow-xl backdrop-blur-md transition-all hover:bg-slate-800 hover:text-sky-200 hover:border-sky-400 active:scale-95"
-      @click="isOpen = !isOpen"
-    >
-      <span class="text-base">🛠️</span>
-      <span>{{ isOpen ? 'Tutup Panel Tuning' : 'Panel Tuning Posisi & Jari (Lengkap)' }}</span>
-      <span
-        class="inline-block h-2 w-2 rounded-full"
-        :class="isOpen ? 'bg-emerald-400 animate-pulse' : 'bg-sky-400'"
-      />
-    </button>
-
-    <!-- Main Floating Tuning Panel -->
-    <div
-      v-if="isOpen"
-      class="w-[460px] max-w-[calc(100vw-2rem)] max-h-[88vh] flex flex-col rounded-2xl border border-slate-700/80 bg-slate-950/95 p-4 text-slate-100 shadow-2xl backdrop-blur-xl transition-all"
-    >
-      <!-- Header -->
-      <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
-        <div>
-          <h3 class="flex items-center gap-1.5 text-sm font-bold text-white">
-            <span>⚙️</span> Interactive Hand & Finger Tuning
-          </h3>
-          <p class="text-[11px] text-slate-400">
-            Kendali 3 ruas tulang jempol (Pangkal, Tengah, Ujung) & telapak tangan
-          </p>
-        </div>
-        <button
-          type="button"
-          class="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-          @click="isOpen = false"
-        >
-          ✕
-        </button>
+  <aside class="debug-panel fixed right-3 top-3 z-50 flex w-[360px] max-w-[calc(100vw-24px)] flex-col items-end gap-2 text-xs text-slate-200">
+    <button type="button" class="debug-button bg-slate-900/95" :aria-expanded="isOpen" aria-controls="hand-debug-panel" @click="isOpen = !isOpen">{{ isOpen ? 'Tutup Debug Tangan' : 'Buka Debug Tangan' }}</button>
+    <section v-if="isOpen" id="hand-debug-panel" aria-label="Kalibrasi tangan dan semua bone" class="w-full max-h-[75vh] overflow-y-auto rounded-xl border border-slate-600 bg-slate-950/95 p-3 shadow-2xl backdrop-blur-md">
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="font-semibold text-sky-300">Debug Tangan & Bone</h2>
+        <label class="flex items-center gap-1.5"><input v-model="debug.enabled" type="checkbox"> Aktifkan debug</label>
       </div>
-
-      <!-- Quick Loop & Stage 4 Helper -->
-      <div class="mt-2.5 flex items-center justify-between rounded-lg bg-slate-900/80 px-2.5 py-1.5 text-xs border border-slate-800">
-        <label class="flex items-center gap-2 cursor-pointer text-slate-300">
-          <input
-            v-model="loopStage4Only"
-            type="checkbox"
-            class="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500"
-          >
-          <span class="text-[11px]">🔁 Loop Tahap 4 terus menerus</span>
-        </label>
-        <button
-          type="button"
-          class="rounded bg-sky-600/80 px-2.5 py-0.5 text-[11px] font-semibold text-white hover:bg-sky-500 active:scale-95"
-          @click="jumpToStage4"
-        >
-          {{ props.controller.state.stageIndex === 3 ? 'Replay Tahap 4' : '👉 Lompat Tahap 4' }}
-        </button>
+      <p class="mt-1 text-[11px] leading-relaxed text-slate-400">Offset disimpan per tahap dan ditambahkan ke animasi. Jeda untuk mengatur kontak dengan presisi.</p>
+      <label for="debug-stage" class="mt-3 block font-medium">Tahap animasi</label>
+      <select id="debug-stage" class="debug-input mt-1 w-full" :value="state.stageId" @change="selectStage"><option v-for="stage in controller.stages" :key="stage.id" :value="stage.id">{{ stage.shortLabel }}</option></select>
+      <div class="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" class="debug-button bg-sky-800" @click="controller.togglePlay()">{{ state.isPlaying ? 'Jeda' : 'Putar' }}</button>
+        <label class="flex items-center gap-1.5"><input v-model="debug.loopStage" type="checkbox"> Ulangi tahap ini</label>
+        <label class="ml-auto flex items-center gap-1">Laju<select v-model.number="debug.playbackRate" class="debug-input" aria-label="Kecepatan animasi"><option :value="0.1">0,1x</option><option :value="0.25">0,25x</option><option :value="0.5">0,5x</option><option :value="1">1x</option><option :value="2">2x</option></select></label>
       </div>
-
-      <!-- Navigation Tabs -->
-      <div class="mt-3 grid grid-cols-5 gap-1 rounded-xl bg-slate-900/90 p-1 border border-slate-800 text-[11px] font-semibold">
-        <button
-          type="button"
-          class="rounded-lg py-1.5 text-center transition-all"
-          :class="activeTab === 'rightHand' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'"
-          @click="activeTab = 'rightHand'"
-        >
-          🖐️ Kanan
-        </button>
-        <button
-          type="button"
-          class="rounded-lg py-1.5 text-center transition-all"
-          :class="activeTab === 'leftHand' ? 'bg-teal-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'"
-          @click="activeTab = 'leftHand'"
-        >
-          🖐️ Kiri
-        </button>
-        <button
-          type="button"
-          class="rounded-lg py-1.5 text-center transition-all"
-          :class="activeTab === 'rightFingers' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'"
-          @click="activeTab = 'rightFingers'"
-        >
-          👆 Jari Rn
-        </button>
-        <button
-          type="button"
-          class="rounded-lg py-1.5 text-center transition-all"
-          :class="activeTab === 'leftFingers' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'"
-          @click="activeTab = 'leftFingers'"
-        >
-          👆 Jari Lf
-        </button>
-        <button
-          type="button"
-          class="rounded-lg py-1.5 text-center transition-all"
-          :class="activeTab === 'code' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'"
-          @click="activeTab = 'code'"
-        >
-          📋 Salin
-        </button>
+      <div class="mt-3 flex items-center justify-between gap-2"><label for="debug-seek">Posisi waktu</label><div class="flex items-center gap-1"><input class="debug-input w-20" type="number" min="0" max="100" step="0.1" :value="Number((state.stageProgress * 100).toFixed(1))" aria-label="Posisi waktu dalam persen" @input="seekPercent">%</div></div>
+      <input id="debug-seek" class="mt-2 w-full accent-sky-400" type="range" min="0" max="100" step="0.1" :value="state.stageProgress * 100" @input="seekPercent">
+      <fieldset class="mt-3 flex gap-3 border-t border-slate-800 pt-3"><legend class="sr-only">Pilih tangan yang diedit</legend><label class="flex items-center gap-1.5"><input v-model="debug.selectedSide" type="radio" value="right" name="debug-hand"> Tangan kanan</label><label class="flex items-center gap-1.5"><input v-model="debug.selectedSide" type="radio" value="left" name="debug-hand"> Tangan kiri</label></fieldset>
+      <div class="mt-3 grid grid-cols-4 gap-1" aria-label="Bagian kalibrasi"><button v-for="tab in tabs" :key="tab.id" type="button" class="debug-button px-1" :class="activeTab === tab.id ? 'bg-sky-800 text-white' : 'bg-slate-800 text-slate-300'" :aria-pressed="activeTab === tab.id" @click="activeTab = tab.id">{{ tab.label }}</button></div>
+      <template v-if="activeTab === 'hand' || activeTab === 'bone'">
+        <template v-if="activeTab === 'bone'"><label for="debug-bone" class="mt-3 block font-medium">Bone ({{ boneNames.length }} pada tangan ini)</label><select id="debug-bone" v-model="debug.selectedBone" class="debug-input mt-1 w-full"><option v-for="bone in boneOptions" :key="bone.name" :value="bone.name">{{ bone.label }}</option></select></template>
+        <div v-if="editableTransform" class="mt-3">
+          <h3 class="font-semibold text-sky-200">Offset tambahan — dapat diedit</h3>
+          <p class="mt-1 text-[10px] leading-relaxed text-slate-400">{{ activeTab === 'bone' ? 'Posisi: mm scene sepanjang sumbu lokal bone. Rotasi: XYZ lokal, setelah pose animasi.' : 'Posisi: mm pada sumbu dunia. Rotasi: derajat pada orientasi pose tangan.' }}</p>
+          <div class="mt-2 grid grid-cols-[60px_repeat(3,minmax(0,1fr))] items-center gap-1.5">
+            <span></span><span v-for="axis in axes" :key="axis" class="text-center font-semibold text-slate-400">{{ axis }}</span>
+            <span>Posisi mm</span><input v-for="(axis, index) in axes" :key="`position-${axis}`" class="debug-input min-w-0 w-full" type="number" step="0.5" :value="displayedDelta('position', index)" :aria-label="`Offset posisi ${activeTab === 'bone' ? 'bone' : 'tangan'} ${axis} dalam milimeter`" @input="updateDelta('position', index, $event)">
+            <span>Rotasi deg</span><input v-for="(axis, index) in axes" :key="`rotation-${axis}`" class="debug-input min-w-0 w-full" type="number" step="0.5" :value="displayedDelta('rotation', index)" :aria-label="`Offset rotasi ${activeTab === 'bone' ? 'bone' : 'tangan'} ${axis} dalam derajat`" @input="updateDelta('rotation', index, $event)">
+          </div>
+          <p class="mt-2 text-[10px] leading-relaxed text-slate-500">Rentang saran: posisi {{ activeTab === 'bone' ? '±20' : '±150' }} mm, rotasi ±180°. Nilai di luar saran tetap diterima.</p>
+          <button type="button" class="debug-button mt-2 bg-slate-800" @click="resetSelected">Nolkan offset {{ activeTab === 'bone' ? 'bone ini' : 'tangan ini' }}</button>
+        </div>
+        <div class="mt-3 border-t border-slate-800 pt-3"><h3 class="font-semibold text-slate-300">Transform aktual — hanya baca</h3><p class="mt-1 text-[10px] text-slate-500">{{ activeTab === 'hand' ? 'Transform armature setelah animasi + offset.' : 'Transform bone setelah animasi + offset.' }} Diperbarui 10x/detik.</p><div v-for="row in currentValues" :key="row.label" class="mt-2"><p class="text-[10px] text-slate-400">{{ row.label }}</p><div class="mt-1 grid grid-cols-3 gap-1 font-mono text-[10px]"><output v-for="(value, index) in row.values" :key="index" class="rounded bg-slate-900 px-1.5 py-1">{{ axes[index] }} {{ value }}</output></div></div><p v-if="!currentValues.length" class="mt-2 text-slate-400">Menunggu rig tangan.</p></div>
+      </template>
+      <div v-else-if="activeTab === 'diagnostics'" class="mt-3 space-y-3">
+        <label class="flex items-center gap-2"><input v-model="debug.showSkeleton" type="checkbox"> Tampilkan skeleton kedua tangan</label><label class="flex items-center gap-2"><input v-model="debug.showAxes" type="checkbox"> Tampilkan sumbu bone terpilih</label><label class="flex items-center gap-2"><input v-model="debug.hideFoam" type="checkbox"> Sembunyikan busa untuk melihat kontak</label>
+        <template v-if="snapshot">
+          <div class="rounded-lg bg-slate-900 p-2">
+            <p>Rig: <strong>{{ snapshot.rigAvailable ? 'Terhubung' : 'Belum tersedia' }}</strong></p>
+            <p class="mt-1">Transform valid: <strong>{{ snapshot.diagnostics.finiteTransforms ? 'Ya' : 'Tidak' }}</strong></p>
+            <p class="mt-1">Jarak pusat telapak: <strong>{{ metric(snapshot.diagnostics.palmCenterDistance, 1000) }} mm</strong></p>
+            <p class="mt-1">Sudut normal telapak: <strong>{{ metric(snapshot.diagnostics.normalAngleDeg) }}°</strong></p>
+            <p class="mt-1">Celah kulit telapak (5 sampel): <strong>{{ metric(snapshot.diagnostics.surfaceGap, 1000) }} mm</strong></p>
+            <p class="mt-1">Gap antarjempol (perkiraan): <strong>{{ metric(snapshot.diagnostics.thumbClearance, 1000) }} mm</strong></p>
+            <p class="mt-1">Gap jari (perkiraan): <strong>{{ metric(snapshot.diagnostics.fingerClearance, 1000) }} mm</strong></p>
+            <p v-if="snapshot.diagnostics.closestFingerPair" class="mt-1 break-words text-[10px] text-slate-400">{{ snapshot.diagnostics.closestFingerPair }}</p>
+            <p class="mt-2 text-[10px] leading-relaxed text-slate-400">Celah kulit memakai 5 ray pada permukaan mesh. Gap jari dan jempol memakai pendekatan kapsul tulang. Nilai negatif menandakan kemungkinan tumpang tindih; nilai positif bukan jaminan bebas benturan.</p>
+            <p class="mt-1 text-[10px] leading-relaxed text-slate-400">Jarak pusat bukan celah kulit. Gunakan tampilan samping dan sembunyikan busa untuk menilai kontak.</p>
+          </div>
+          <ul v-if="snapshot.diagnostics.warnings.length" class="list-disc space-y-1 pl-4 text-amber-300"><li v-for="warning in snapshot.diagnostics.warnings" :key="warning">{{ warning }}</li></ul>
+        </template>
+        <button type="button" class="debug-button bg-slate-800" @click="refreshSnapshot">Perbarui angka</button>
       </div>
-
-      <!-- Tab Content Area (Scrollable) -->
-      <div class="mt-3 flex-1 overflow-y-auto pr-1 space-y-3.5 text-xs">
-        <!-- ========================================== -->
-        <!-- TAB 1: TANGAN KANAN (ATAS / SCRUBBING)     -->
-        <!-- ========================================== -->
-        <div v-if="activeTab === 'rightHand'" class="space-y-3">
-          <div class="rounded-lg bg-sky-950/40 border border-sky-800/40 p-2 text-[11px] text-sky-200">
-            <strong>🖐️ Tangan Kanan (Posisi Atas / Menggosok):</strong> Atur posisi X/Y/Z dan rotasi sudut Pitch/Yaw/Roll.
-          </div>
-
-          <!-- Ketinggian Y -->
-          <div class="rounded-xl border border-sky-500/40 bg-sky-950/20 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-bold text-sky-300">↕️ Ketinggian Tangan Kanan (Y):</span>
-              <span class="rounded bg-sky-500/20 px-2 py-0.5 font-mono font-bold text-sky-200">
-                {{ (tuning.rightOffsetY * 1000).toFixed(1) }} mm
-              </span>
-            </div>
-            <input
-              v-model.number="tuning.rightOffsetY"
-              type="range"
-              min="0.040"
-              max="0.250"
-              step="0.001"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-6 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetY', -10)">-10</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetY', -5)">-5</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetY', -1)">-1</button>
-              <button type="button" class="btn-ctrl-active" @click="adjustMm('rightOffsetY', +1)">+1</button>
-              <button type="button" class="btn-ctrl-active" @click="adjustMm('rightOffsetY', +5)">+5</button>
-              <button type="button" class="btn-ctrl-active" @click="adjustMm('rightOffsetY', +10)">+10</button>
-            </div>
-          </div>
-
-          <!-- Maju / Mundur Z -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">↗️ Maju / Mundur (Z):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">
-                {{ (tuning.rightOffsetZ * 1000).toFixed(1) }} mm
-              </span>
-            </div>
-            <p class="text-[10px] text-slate-400 mt-0.5">(-) Lebih maju ke jari kiri | (+) Lebih mundur ke pergelangan</p>
-            <input
-              v-model.number="tuning.rightOffsetZ"
-              type="range"
-              min="-0.180"
-              max="0.080"
-              step="0.001"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetZ', -5)">-5 mm (Maju)</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetZ', -1)">-1 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetZ', +1)">+1 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetZ', +5)">+5 mm (Mundur)</button>
-            </div>
-          </div>
-
-          <!-- Geser Kanan / Kiri X -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">↔️ Geser Samping (X):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">
-                {{ (tuning.rightOffsetX * 1000).toFixed(1) }} mm
-              </span>
-            </div>
-            <input
-              v-model.number="tuning.rightOffsetX"
-              type="range"
-              min="-0.260"
-              max="0.020"
-              step="0.001"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetX', -5)">-5 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetX', -1)">-1 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetX', +1)">+1 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('rightOffsetX', +5)">+5 mm</button>
-            </div>
-          </div>
-
-          <!-- Rotasi Pitch (X) -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">📐 Kemiringan Lengan / Pitch (X):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">{{ tuning.rightPitch }}°</span>
-            </div>
-            <input
-              v-model.number="tuning.rightPitch"
-              type="range"
-              min="-20"
-              max="90"
-              step="1"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-400"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightPitch', -2)">-2°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightPitch', -1)">-1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightPitch', +1)">+1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightPitch', +2)">+2°</button>
-            </div>
-          </div>
-
-          <!-- Rotasi Yaw (Y) -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">🔄 Arah Belok / Yaw (Y):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">{{ tuning.rightYaw }}°</span>
-            </div>
-            <input
-              v-model.number="tuning.rightYaw"
-              type="range"
-              min="-60"
-              max="60"
-              step="1"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightYaw', -2)">-2°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightYaw', -1)">-1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightYaw', +1)">+1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightYaw', +2)">+2°</button>
-            </div>
-          </div>
-
-          <!-- Rotasi Roll (Z) -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">💫 Kemiringan Miring / Roll (Z):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">{{ tuning.rightRoll }}°</span>
-            </div>
-            <input
-              v-model.number="tuning.rightRoll"
-              type="range"
-              min="20"
-              max="120"
-              step="1"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-pink-400"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightRoll', -2)">-2°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightRoll', -1)">-1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightRoll', +1)">+1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('rightRoll', +2)">+2°</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- TAB 2: TANGAN KIRI (BAWAH / MENOPANG)     -->
-        <!-- ========================================== -->
-        <div v-if="activeTab === 'leftHand'" class="space-y-3">
-          <div class="rounded-lg bg-teal-950/40 border border-teal-800/40 p-2 text-[11px] text-teal-200">
-            <strong>🖐️ Tangan Kiri (Posisi Bawah / Menopang):</strong> Menghadap ke atas menerima gosokan telapak kanan.
-          </div>
-
-          <!-- Ketinggian Y -->
-          <div class="rounded-xl border border-teal-500/40 bg-teal-950/20 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-bold text-teal-300">↕️ Ketinggian Tangan Kiri (Y):</span>
-              <span class="rounded bg-teal-500/20 px-2 py-0.5 font-mono font-bold text-teal-200">
-                {{ (tuning.leftOffsetY * 1000).toFixed(1) }} mm
-              </span>
-            </div>
-            <input
-              v-model.number="tuning.leftOffsetY"
-              type="range"
-              min="0.010"
-              max="0.160"
-              step="0.001"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-teal-500"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-6 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetY', -10)">-10</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetY', -5)">-5</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetY', -1)">-1</button>
-              <button type="button" class="btn-ctrl-active" @click="adjustMm('leftOffsetY', +1)">+1</button>
-              <button type="button" class="btn-ctrl-active" @click="adjustMm('leftOffsetY', +5)">+5</button>
-              <button type="button" class="btn-ctrl-active" @click="adjustMm('leftOffsetY', +10)">+10</button>
-            </div>
-          </div>
-
-          <!-- Maju / Mundur Z -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">↗️ Maju / Mundur (Z):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">
-                {{ (tuning.leftOffsetZ * 1000).toFixed(1) }} mm
-              </span>
-            </div>
-            <input
-              v-model.number="tuning.leftOffsetZ"
-              type="range"
-              min="-0.150"
-              max="0.050"
-              step="0.001"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetZ', -5)">-5 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetZ', -1)">-1 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetZ', +1)">+1 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetZ', +5)">+5 mm</button>
-            </div>
-          </div>
-
-          <!-- Geser Samping X -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">↔️ Geser Samping (X):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">
-                {{ (tuning.leftOffsetX * 1000).toFixed(1) }} mm
-              </span>
-            </div>
-            <input
-              v-model.number="tuning.leftOffsetX"
-              type="range"
-              min="0.000"
-              max="0.180"
-              step="0.001"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetX', -5)">-5 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetX', -1)">-1 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetX', +1)">+1 mm</button>
-              <button type="button" class="btn-ctrl" @click="adjustMm('leftOffsetX', +5)">+5 mm</button>
-            </div>
-          </div>
-
-          <!-- Rotasi Pitch (X) -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">📐 Kemiringan Lengan / Pitch (X):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">{{ tuning.leftPitch }}°</span>
-            </div>
-            <input
-              v-model.number="tuning.leftPitch"
-              type="range"
-              min="-20"
-              max="50"
-              step="1"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-400"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftPitch', -2)">-2°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftPitch', -1)">-1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftPitch', +1)">+1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftPitch', +2)">+2°</button>
-            </div>
-          </div>
-
-          <!-- Rotasi Yaw (Y) -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">🔄 Arah Belok / Yaw (Y):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">{{ tuning.leftYaw }}°</span>
-            </div>
-            <input
-              v-model.number="tuning.leftYaw"
-              type="range"
-              min="-50"
-              max="40"
-              step="1"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftYaw', -2)">-2°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftYaw', -1)">-1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftYaw', +1)">+1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftYaw', +2)">+2°</button>
-            </div>
-          </div>
-
-          <!-- Rotasi Roll (Z) -->
-          <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-slate-300">💫 Kemiringan Miring / Roll (Z):</span>
-              <span class="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-200">{{ tuning.leftRoll }}°</span>
-            </div>
-            <input
-              v-model.number="tuning.leftRoll"
-              type="range"
-              min="10"
-              max="90"
-              step="1"
-              class="mt-2 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-pink-400"
-              @input="applyChange"
-            >
-            <div class="mt-1.5 grid grid-cols-4 gap-1">
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftRoll', -2)">-2°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftRoll', -1)">-1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftRoll', +1)">+1°</button>
-              <button type="button" class="btn-ctrl" @click="adjustDeg('leftRoll', +2)">+2°</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- TAB 3: JARI TANGAN KANAN                   -->
-        <!-- ========================================== -->
-        <div v-if="activeTab === 'rightFingers'" class="space-y-3">
-          <div class="rounded-lg bg-indigo-950/40 border border-indigo-800/40 p-2 text-[11px] text-indigo-200">
-            <strong>👆 Jari Tangan Kanan:</strong> Atur per-sendi tulang jempol (Pangkal, Tengah, Ujung) agar tidak berbenturan.
-          </div>
-
-          <!-- Finger Selector Pills -->
-          <div class="flex flex-wrap gap-1 rounded-lg bg-slate-900/80 p-1 border border-slate-800 text-[10px]">
-            <button
-              v-for="f in fingerList"
-              :key="f.key"
-              type="button"
-              class="rounded-md px-2 py-1 transition-all"
-              :class="activeRightFinger === f.key ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-              @click="activeRightFinger = f.key"
-            >
-              {{ f.icon }} {{ f.label }}
-            </button>
-            <button
-              type="button"
-              class="rounded-md px-2 py-1 transition-all"
-              :class="activeRightFinger === 'all' ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-              @click="activeRightFinger = 'all'"
-            >
-              Semua Jari
-            </button>
-          </div>
-
-          <!-- SPECIAL DEDICATED VIEW: JEMPOL TANGAN KANAN (PER-BONE JOINTS) -->
-          <div
-            v-if="activeRightFinger === 'thumb' || activeRightFinger === 'all'"
-            class="rounded-xl border border-amber-500/50 bg-amber-950/20 p-3 space-y-3"
-          >
-            <div class="flex items-center justify-between border-b border-amber-500/30 pb-1.5">
-              <span class="font-bold text-amber-300 flex items-center gap-1.5 text-xs">
-                <span>👍</span> Jempol Kanan - Rangka 3 Tulang (Bone Chain)
-              </span>
-              <span class="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-mono text-amber-200">R_Thumb</span>
-            </div>
-
-            <!-- PRESET ANTI-PENGKOR & QUICK ACTIONS -->
-            <div class="rounded-lg bg-slate-900/90 p-2 border border-slate-800 space-y-1.5">
-              <span class="text-[10px] text-amber-300/90 font-bold flex items-center gap-1">
-                <span>⚡</span> Tombol Solusi Cepat:
-              </span>
-              <div class="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  class="rounded bg-emerald-600/90 px-2 py-1 text-[10px] font-semibold text-white hover:bg-emerald-500 active:scale-95 text-center shadow"
-                  @click="applyRightThumbNatural"
-                >
-                  ✨ Pulihkan Alami (Anti-Pengkor)
-                </button>
-                <button
-                  type="button"
-                  class="rounded bg-sky-600/80 px-2 py-1 text-[10px] font-semibold text-white hover:bg-sky-500 active:scale-95 text-center"
-                  @click="applyRightThumbOpenWide"
-                >
-                  🖐️ Buka Lebar ke Samping
-                </button>
-              </div>
-            </div>
-
-            <!-- Joint Selector Sub-Tabs for Thumb -->
-            <div class="flex gap-1 rounded-lg bg-slate-900/80 p-1 border border-slate-800 text-[10px]">
-              <button
-                type="button"
-                class="flex-1 rounded py-1 transition-all"
-                :class="activeRightThumbJoint === 'all' ? 'bg-amber-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-                @click="activeRightThumbJoint = 'all'"
-              >
-                Semua Sendi
-              </button>
-              <button
-                type="button"
-                class="flex-1 rounded py-1 transition-all"
-                :class="activeRightThumbJoint === 'base' ? 'bg-sky-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-                @click="activeRightThumbJoint = 'base'"
-              >
-                🦴 Pangkal
-              </button>
-              <button
-                type="button"
-                class="flex-1 rounded py-1 transition-all"
-                :class="activeRightThumbJoint === 'mid' ? 'bg-amber-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-                @click="activeRightThumbJoint = 'mid'"
-              >
-                🦴 Tengah
-              </button>
-              <button
-                type="button"
-                class="flex-1 rounded py-1 transition-all"
-                :class="activeRightThumbJoint === 'tip' ? 'bg-rose-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-                @click="activeRightThumbJoint = 'tip'"
-              >
-                🦴 Ujung
-              </button>
-            </div>
-
-            <!-- SENDI 1: PANGKAL JEMPOL (Bone.017) -->
-            <div
-              v-if="activeRightThumbJoint === 'all' || activeRightThumbJoint === 'base'"
-              class="rounded-lg bg-slate-900/80 p-2.5 border border-slate-800 space-y-2"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-sky-300 text-[11px] flex items-center gap-1">
-                  <span>🦴</span> Sendi 1: Pangkal Jempol (Bone.017)
-                </span>
-                <span class="text-[9px] text-slate-400">Akar di Telapak</span>
-              </div>
-              <p class="text-[10px] text-amber-200/80 leading-tight">
-                💡 <em>Gunakan <strong>Renggangan (Spread)</strong> untuk membuka jempol. Biarkan <strong>Twist di 0°</strong> agar daging telapak tidak melintir/pengkor.</em>
-              </p>
-
-              <!-- Pangkal Spread (Utama) -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300 font-semibold">Pangkal Renggangan (Spread):</span>
-                  <span class="font-mono text-cyan-300 font-bold">{{ tuning.rightThumbBaseSpread.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbBaseSpread"
-                  type="range"
-                  min="-30"
-                  max="50"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseSpread', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseSpread', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseSpread', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseSpread', +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Pangkal Curl -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Pangkal Tekukan (Curl):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.rightThumbBaseCurl.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbBaseCurl"
-                  type="range"
-                  min="-25"
-                  max="40"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseCurl', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseCurl', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseCurl', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseCurl', +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Pangkal Twist -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Pangkal Putaran Poros (Twist):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.rightThumbBaseTwist.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbBaseTwist"
-                  type="range"
-                  min="-30"
-                  max="30"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseTwist', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseTwist', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseTwist', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbBaseTwist', +2)">+2°</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- SENDI 2: TENGAH JEMPOL (Bone.018) -->
-            <div
-              v-if="activeRightThumbJoint === 'all' || activeRightThumbJoint === 'mid'"
-              class="rounded-lg bg-slate-900/80 p-2.5 border border-slate-800 space-y-2"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-amber-300 text-[11px] flex items-center gap-1">
-                  <span>🦴</span> Sendi 2: Tengah Jempol (Bone.018)
-                </span>
-                <span class="text-[9px] text-slate-400">Ruas Tengah (MCP)</span>
-              </div>
-              <p class="text-[10px] text-slate-400 leading-tight">
-                Sendi utama untuk memutar (twist) dan menekuk (curl) jempol agar menghadap ke bawah/atas secara alami.
-              </p>
-
-              <!-- Tengah Curl -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Tengah Tekukan (Curl):</span>
-                  <span class="font-mono text-amber-300 font-bold">{{ tuning.rightThumbMidCurl.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbMidCurl"
-                  type="range"
-                  min="-20"
-                  max="50"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidCurl', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidCurl', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidCurl', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidCurl', +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Tengah Spread -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Tengah Renggangan (Spread):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.rightThumbMidSpread.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbMidSpread"
-                  type="range"
-                  min="-25"
-                  max="35"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidSpread', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidSpread', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidSpread', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidSpread', +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Tengah Twist -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Tengah Putaran (Twist):</span>
-                  <span class="font-mono text-purple-300 font-bold">{{ tuning.rightThumbMidTwist.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbMidTwist"
-                  type="range"
-                  min="-50"
-                  max="50"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidTwist', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidTwist', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidTwist', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbMidTwist', +2)">+2°</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- SENDI 3: UJUNG JEMPOL (Bone.019) -->
-            <div
-              v-if="activeRightThumbJoint === 'all' || activeRightThumbJoint === 'tip'"
-              class="rounded-lg bg-slate-900/80 p-2.5 border border-slate-800 space-y-2"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-rose-300 text-[11px] flex items-center gap-1">
-                  <span>🦴</span> Sendi 3: Ujung Jempol (Bone.019)
-                </span>
-                <span class="text-[9px] text-slate-400">Ruas Kuku (Distal)</span>
-              </div>
-
-              <!-- Ujung Curl -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Ujung Tekukan (Curl):</span>
-                  <span class="font-mono text-rose-300 font-bold">{{ tuning.rightThumbTipCurl.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbTipCurl"
-                  type="range"
-                  min="-20"
-                  max="45"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-rose-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipCurl', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipCurl', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipCurl', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipCurl', +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Ujung Spread -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Ujung Renggangan (Spread):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.rightThumbTipSpread.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbTipSpread"
-                  type="range"
-                  min="-25"
-                  max="25"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipSpread', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipSpread', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipSpread', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipSpread', +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Ujung Twist -->
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Ujung Putaran (Twist):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.rightThumbTipTwist.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.rightThumbTipTwist"
-                  type="range"
-                  min="-40"
-                  max="40"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipTwist', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipTwist', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipTwist', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('rightThumbTipTwist', +2)">+2°</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- OTHER FINGERS TANGAN KANAN -->
-          <template v-for="f in fingerList.filter(item => item.key !== 'thumb')" :key="f.key">
-            <div
-              v-if="activeRightFinger === f.key || activeRightFinger === 'all'"
-              class="rounded-xl border border-slate-800 bg-slate-900/60 p-3 space-y-2.5"
-            >
-              <div class="flex items-center justify-between border-b border-slate-800/80 pb-1">
-                <span class="font-bold text-indigo-300 flex items-center gap-1">
-                  <span>{{ f.icon }}</span> {{ f.label }} Tangan Kanan
-                </span>
-                <span class="text-[10px] text-slate-400">Right {{ f.key }}</span>
-              </div>
-
-              <!-- Curl (Tekukan) -->
-              <div>
-                <div class="flex items-center justify-between text-xs">
-                  <span class="text-slate-300">Tekukan (Curl):</span>
-                  <span class="font-mono text-slate-200 font-bold">
-                    {{ (tuning[`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning] as number).toFixed(1) }}°
-                  </span>
-                </div>
-                <input
-                  v-model.number="tuning[`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning]"
-                  type="range"
-                  min="-25"
-                  max="45"
-                  step="0.5"
-                  class="mt-1.5 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-400"
-                  @input="applyChange"
-                >
-                <div class="mt-1 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning, -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning, -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning, +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning, +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Spread (Renggangan / Samping) -->
-              <div>
-                <div class="flex items-center justify-between text-xs">
-                  <span class="text-slate-300">Renggangan Samping (Spread):</span>
-                  <span class="font-mono text-slate-200 font-bold">
-                    {{ (tuning[`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning] as number).toFixed(1) }}°
-                  </span>
-                </div>
-                <input
-                  v-model.number="tuning[`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning]"
-                  type="range"
-                  min="-30"
-                  max="30"
-                  step="0.5"
-                  class="mt-1.5 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                  @input="applyChange"
-                >
-                <div class="mt-1 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning, -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning, -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning, +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning, +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Twist (Putaran) -->
-              <div>
-                <div class="flex items-center justify-between text-xs">
-                  <span class="text-slate-300">Putaran (Twist):</span>
-                  <span class="font-mono text-slate-200 font-bold">
-                    {{ (tuning[`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning] as number).toFixed(1) }}°
-                  </span>
-                </div>
-                <input
-                  v-model.number="tuning[`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning]"
-                  type="range"
-                  min="-25"
-                  max="85"
-                  step="0.5"
-                  class="mt-1.5 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                  @input="applyChange"
-                >
-                <div class="mt-1 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning, -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning, -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning, +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`right${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning, +2)">+2°</button>
-                </div>
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- TAB 4: JARI TANGAN KIRI                    -->
-        <!-- ========================================== -->
-        <div v-if="activeTab === 'leftFingers'" class="space-y-3">
-          <div class="rounded-lg bg-emerald-950/40 border border-emerald-800/40 p-2 text-[11px] text-emerald-200">
-            <strong>👆 Jari Tangan Kiri:</strong> Atur per-sendi tulang jempol kiri (Pangkal, Tengah, Ujung) agar membuka sempurna.
-          </div>
-
-          <!-- Finger Selector Pills -->
-          <div class="flex flex-wrap gap-1 rounded-lg bg-slate-900/80 p-1 border border-slate-800 text-[10px]">
-            <button
-              v-for="f in fingerList"
-              :key="f.key"
-              type="button"
-              class="rounded-md px-2 py-1 transition-all"
-              :class="activeLeftFinger === f.key ? 'bg-emerald-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-              @click="activeLeftFinger = f.key"
-            >
-              {{ f.icon }} {{ f.label }}
-            </button>
-            <button
-              type="button"
-              class="rounded-md px-2 py-1 transition-all"
-              :class="activeLeftFinger === 'all' ? 'bg-emerald-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-              @click="activeLeftFinger = 'all'"
-            >
-              Semua Jari
-            </button>
-          </div>
-
-          <!-- SPECIAL DEDICATED VIEW: JEMPOL TANGAN KIRI (PER-BONE JOINTS) -->
-          <div
-            v-if="activeLeftFinger === 'thumb' || activeLeftFinger === 'all'"
-            class="rounded-xl border border-teal-500/50 bg-teal-950/20 p-3 space-y-3"
-          >
-            <div class="flex items-center justify-between border-b border-teal-500/30 pb-1.5">
-              <span class="font-bold text-teal-300 flex items-center gap-1.5 text-xs">
-                <span>👍</span> Jempol Kiri - Rangka 3 Tulang (Bone Chain)
-              </span>
-              <span class="rounded bg-teal-500/20 px-1.5 py-0.5 text-[9px] font-mono text-teal-200">L_Thumb</span>
-            </div>
-
-            <!-- Quick Action Button -->
-            <div class="rounded-lg bg-slate-900/90 p-2 border border-slate-800 flex justify-between items-center">
-              <span class="text-[10px] text-teal-300 font-bold">Preset Posisi Jempol Kiri:</span>
-              <button
-                type="button"
-                class="rounded bg-teal-600/90 px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-teal-500 active:scale-95 shadow"
-                @click="applyLeftThumbNatural"
-              >
-                ✨ Bentuk Alami Jempol Kiri
-              </button>
-            </div>
-
-            <!-- Joint Selector Sub-Tabs for Left Thumb -->
-            <div class="flex gap-1 rounded-lg bg-slate-900/80 p-1 border border-slate-800 text-[10px]">
-              <button
-                type="button"
-                class="flex-1 rounded py-1 transition-all"
-                :class="activeLeftThumbJoint === 'all' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-                @click="activeLeftThumbJoint = 'all'"
-              >
-                Semua Sendi
-              </button>
-              <button
-                type="button"
-                class="flex-1 rounded py-1 transition-all"
-                :class="activeLeftThumbJoint === 'base' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-                @click="activeLeftThumbJoint = 'base'"
-              >
-                🦴 Pangkal
-              </button>
-              <button
-                type="button"
-                class="flex-1 rounded py-1 transition-all"
-                :class="activeLeftThumbJoint === 'mid' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-                @click="activeLeftThumbJoint = 'mid'"
-              >
-                🦴 Tengah
-              </button>
-              <button
-                type="button"
-                class="flex-1 rounded py-1 transition-all"
-                :class="activeLeftThumbJoint === 'tip' ? 'bg-teal-600 text-white font-bold' : 'text-slate-400 hover:text-white'"
-                @click="activeLeftThumbJoint = 'tip'"
-              >
-                🦴 Ujung
-              </button>
-            </div>
-
-            <!-- SENDI 1: PANGKAL JEMPOL KIRI (Bone.017) -->
-            <div
-              v-if="activeLeftThumbJoint === 'all' || activeLeftThumbJoint === 'base'"
-              class="rounded-lg bg-slate-900/80 p-2.5 border border-slate-800 space-y-2"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-teal-300 text-[11px] flex items-center gap-1">
-                  <span>🦴</span> Sendi 1: Pangkal Jempol Kiri (Bone.017)
-                </span>
-                <span class="text-[9px] text-slate-400">Akar di Telapak</span>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Pangkal Renggangan (Spread):</span>
-                  <span class="font-mono text-cyan-300 font-bold">{{ tuning.leftThumbBaseSpread.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbBaseSpread"
-                  type="range"
-                  min="-20"
-                  max="70"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseSpread', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseSpread', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseSpread', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseSpread', +2)">+2°</button>
-                </div>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Pangkal Tekukan (Curl):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.leftThumbBaseCurl.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbBaseCurl"
-                  type="range"
-                  min="-30"
-                  max="50"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-teal-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseCurl', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseCurl', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseCurl', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseCurl', +2)">+2°</button>
-                </div>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Pangkal Putaran (Twist):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.leftThumbBaseTwist.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbBaseTwist"
-                  type="range"
-                  min="-40"
-                  max="40"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseTwist', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseTwist', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseTwist', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbBaseTwist', +2)">+2°</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- SENDI 2: TENGAH JEMPOL KIRI (Bone.018) -->
-            <div
-              v-if="activeLeftThumbJoint === 'all' || activeLeftThumbJoint === 'mid'"
-              class="rounded-lg bg-slate-900/80 p-2.5 border border-slate-800 space-y-2"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-teal-300 text-[11px] flex items-center gap-1">
-                  <span>🦴</span> Sendi 2: Tengah Jempol Kiri (Bone.018)
-                </span>
-                <span class="text-[9px] text-slate-400">Ruas Tengah (MCP)</span>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Tengah Tekukan (Curl):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.leftThumbMidCurl.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbMidCurl"
-                  type="range"
-                  min="-30"
-                  max="50"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-teal-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidCurl', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidMidCurl', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidCurl', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidCurl', +2)">+2°</button>
-                </div>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Tengah Renggangan (Spread):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.leftThumbMidSpread.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbMidSpread"
-                  type="range"
-                  min="-30"
-                  max="50"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidSpread', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidSpread', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidSpread', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidSpread', +2)">+2°</button>
-                </div>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Tengah Putaran (Twist):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.leftThumbMidTwist.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbMidTwist"
-                  type="range"
-                  min="-40"
-                  max="40"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidTwist', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidTwist', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidTwist', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbMidTwist', +2)">+2°</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- SENDI 3: UJUNG JEMPOL KIRI (Bone.019) -->
-            <div
-              v-if="activeLeftThumbJoint === 'all' || activeLeftThumbJoint === 'tip'"
-              class="rounded-lg bg-slate-900/80 p-2.5 border border-slate-800 space-y-2"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-bold text-teal-300 text-[11px] flex items-center gap-1">
-                  <span>🦴</span> Sendi 3: Ujung Jempol Kiri (Bone.019)
-                </span>
-                <span class="text-[9px] text-slate-400">Ruas Kuku (Distal)</span>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Ujung Tekukan (Curl):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.leftThumbTipCurl.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbTipCurl"
-                  type="range"
-                  min="-30"
-                  max="50"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-teal-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipCurl', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipCurl', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipCurl', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipCurl', +2)">+2°</button>
-                </div>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Ujung Renggangan (Spread):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.leftThumbTipSpread.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbTipSpread"
-                  type="range"
-                  min="-30"
-                  max="30"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipSpread', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipSpread', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipSpread', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipSpread', +2)">+2°</button>
-                </div>
-              </div>
-
-              <div>
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="text-slate-300">Ujung Putaran (Twist):</span>
-                  <span class="font-mono text-slate-200 font-bold">{{ tuning.leftThumbTipTwist.toFixed(1) }}°</span>
-                </div>
-                <input
-                  v-model.number="tuning.leftThumbTipTwist"
-                  type="range"
-                  min="-40"
-                  max="40"
-                  step="0.5"
-                  class="mt-1 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                  @input="applyChange"
-                >
-                <div class="mt-0.5 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipTwist', -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipTwist', -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipTwist', +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg('leftThumbTipTwist', +2)">+2°</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- OTHER FINGERS TANGAN KIRI -->
-          <template v-for="f in fingerList.filter(item => item.key !== 'thumb')" :key="f.key">
-            <div
-              v-if="activeLeftFinger === f.key || activeLeftFinger === 'all'"
-              class="rounded-xl border border-slate-800 bg-slate-900/60 p-3 space-y-2.5"
-            >
-              <div class="flex items-center justify-between border-b border-slate-800/80 pb-1">
-                <span class="font-bold text-emerald-300 flex items-center gap-1">
-                  <span>{{ f.icon }}</span> {{ f.label }} Tangan Kiri
-                </span>
-                <span class="text-[10px] text-slate-400">Left {{ f.key }}</span>
-              </div>
-
-              <!-- Curl (Tekukan) -->
-              <div>
-                <div class="flex items-center justify-between text-xs">
-                  <span class="text-slate-300">Tekukan (Curl):</span>
-                  <span class="font-mono text-slate-200 font-bold">
-                    {{ (tuning[`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning] as number).toFixed(1) }}°
-                  </span>
-                </div>
-                <input
-                  v-model.number="tuning[`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning]"
-                  type="range"
-                  min="-25"
-                  max="45"
-                  step="0.5"
-                  class="mt-1.5 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-400"
-                  @input="applyChange"
-                >
-                <div class="mt-1 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning, -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning, -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning, +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Curl` as keyof RubPalmsLiveTuning, +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Spread (Renggangan / Samping) -->
-              <div>
-                <div class="flex items-center justify-between text-xs">
-                  <span class="text-slate-300">Renggangan Samping (Spread):</span>
-                  <span class="font-mono text-slate-200 font-bold">
-                    {{ (tuning[`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning] as number).toFixed(1) }}°
-                  </span>
-                </div>
-                <input
-                  v-model.number="tuning[`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning]"
-                  type="range"
-                  min="-30"
-                  max="30"
-                  step="0.5"
-                  class="mt-1.5 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                  @input="applyChange"
-                >
-                <div class="mt-1 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning, -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning, -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning, +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Spread` as keyof RubPalmsLiveTuning, +2)">+2°</button>
-                </div>
-              </div>
-
-              <!-- Twist (Putaran) -->
-              <div>
-                <div class="flex items-center justify-between text-xs">
-                  <span class="text-slate-300">Putaran (Twist):</span>
-                  <span class="font-mono text-slate-200 font-bold">
-                    {{ (tuning[`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning] as number).toFixed(1) }}°
-                  </span>
-                </div>
-                <input
-                  v-model.number="tuning[`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning]"
-                  type="range"
-                  min="-25"
-                  max="25"
-                  step="0.5"
-                  class="mt-1.5 w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                  @input="applyChange"
-                >
-                <div class="mt-1 grid grid-cols-4 gap-1">
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning, -2)">-2°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning, -0.5)">-0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning, +0.5)">+0.5°</button>
-                  <button type="button" class="btn-ctrl" @click="adjustDeg(`left${f.key.charAt(0).toUpperCase() + f.key.slice(1)}Twist` as keyof RubPalmsLiveTuning, +2)">+2°</button>
-                </div>
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- TAB 5: KODE & SALIN NILAI                  -->
-        <!-- ========================================== -->
-        <div v-if="activeTab === 'code'" class="space-y-3">
-          <div class="flex items-center justify-between text-xs">
-            <span class="font-semibold text-slate-300">Ringkasan Konfigurasi Live:</span>
-            <button
-              type="button"
-              class="text-[10px] text-rose-400 underline hover:text-rose-300"
-              @click="doReset"
-            >
-              Reset Semua ke Default
-            </button>
-          </div>
-
-          <pre class="max-h-64 rounded-lg bg-slate-950 p-2.5 font-mono text-[10px] text-emerald-300 overflow-x-auto overflow-y-auto leading-relaxed border border-slate-800">{{ formattedCode }}</pre>
-
-          <button
-            type="button"
-            class="flex w-full items-center justify-center gap-1.5 rounded-lg py-2.5 text-xs font-bold text-white shadow transition-all active:scale-98"
-            :class="isCopied ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-sky-600 hover:bg-sky-500'"
-            @click="copyValues"
-          >
-            <span>{{ isCopied ? '✅ Nilai Berhasil Disalin ke Clipboard!' : '📋 Salin Nilai ke Clipboard untuk Diberitahukan ke AI' }}</span>
-          </button>
-          <p class="text-center text-[10.5px] text-slate-400">
-            Setelah Anda mengatur posisi & jari hingga pas sempurna tanpa tabrakan, klik tombol salin di atas dan paste di chat ini!
-          </p>
-
-          <!-- Skeleton Architecture Inspection Box -->
-          <div class="mt-3 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5 text-[10.5px] text-slate-400 space-y-1">
-            <span class="font-bold text-slate-300 block">ℹ️ Informasi Struktur Tulang Rig Model 3D (GLB):</span>
-            <p>Model ini memiliki total 20 tulang per tangan:</p>
-            <ul class="list-disc list-inside space-y-0.5 text-slate-400">
-              <li><strong>Pergelangan (`Bone`)</strong>: 1 tulang induk penggerak seluruh telapak.</li>
-              <li><strong>Jempol (`Bone.017` s/d `Bone.019`)</strong>: 3 ruas tulang (Pangkal, Tengah, Ujung).</li>
-              <li><strong>Telunjuk (`Bone.013` s/d `Bone.016`)</strong>: 4 ruas tulang.</li>
-              <li><strong>Jari Tengah (`Bone.009` s/d `Bone.012`)</strong>: 4 ruas tulang.</li>
-              <li><strong>Jari Manis (`Bone.005` s/d `Bone.008`)</strong>: 4 ruas tulang.</li>
-              <li><strong>Kelingking (`Bone.001` s/d `Bone.004`)</strong>: 4 ruas tulang.</li>
-            </ul>
-            <p class="text-[10px] text-amber-300/80 mt-1">
-              *Catatan: Semua 20 tulang sudah terhubung ke kontrol panel ini tanpa ada yang tertinggal.
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+      <div v-else class="mt-3"><p class="text-[11px] leading-relaxed text-slate-400">Ekspor memuat offset semua tahap. Impor memeriksa versi, tahap, nama bone, dan angka sebelum menerapkan perubahan.</p><div class="mt-2 flex flex-wrap gap-1.5"><button type="button" class="debug-button bg-slate-800" @click="exportJson">Buat JSON</button><button type="button" class="debug-button bg-slate-800" @click="copyJson">Salin JSON</button><button type="button" class="debug-button bg-sky-800" @click="importJson()">Terapkan JSON</button></div><label for="debug-json" class="mt-2 block text-[10px] text-slate-400">JSON kalibrasi seluruh tahap</label><textarea id="debug-json" v-model="jsonText" class="debug-input mt-1 h-48 w-full resize-y font-mono text-[10px]" spellcheck="false" /><div class="mt-2 flex gap-1.5"><button type="button" class="debug-button bg-slate-800" @click="saveLocal">Simpan Lokal</button><button type="button" class="debug-button bg-slate-800" @click="loadLocal">Muat Lokal</button></div><p class="mt-2 text-[10px] text-slate-500">Tidak dimuat otomatis. Kalibrasi tidak mengubah berkas GLB atau kode animasi.</p></div>
+      <div class="mt-3 border-t border-slate-800 pt-3"><button type="button" class="debug-button bg-slate-800 text-amber-200" @click="resetStage">Nolkan semua offset tahap ini</button><p v-if="feedback" role="status" class="mt-2 text-[11px] leading-relaxed" :class="feedbackError ? 'text-amber-300' : 'text-emerald-300'">{{ feedback }}</p></div>
+    </section>
+  </aside>
 </template>
 
 <style scoped>
-.btn-ctrl {
-  background-color: rgb(30 41 59);
-  color: rgb(203 213 225);
-  font-size: 10px;
-  font-weight: 500;
-  padding: 4px 2px;
-  border-radius: 6px;
-  transition: all 0.15s;
-}
-.btn-ctrl:hover {
-  background-color: rgb(51 65 85);
-  color: #fff;
-}
-.btn-ctrl:active {
-  transform: scale(0.95);
-}
-
-.btn-ctrl-active {
-  background-color: rgba(2, 132, 199, 0.7);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 4px 2px;
-  border-radius: 6px;
-  transition: all 0.15s;
-}
-.btn-ctrl-active:hover {
-  background-color: rgb(2, 132, 199);
-}
-.btn-ctrl-active:active {
-  transform: scale(0.95);
-}
+.debug-input { border: 1px solid #475569; border-radius: 0.375rem; background: #0f172a; color: #e2e8f0; padding: 0.35rem 0.4rem; }
+.debug-button { border: 1px solid #475569; border-radius: 0.5rem; padding: 0.45rem 0.65rem; font-weight: 500; cursor: pointer; }
+.debug-button:hover { border-color: #7dd3fc; }
+.debug-panel :is(button, input, select, textarea):focus-visible { outline: 2px solid #7dd3fc; outline-offset: 2px; }
+.debug-panel input[type='checkbox'], .debug-panel input[type='radio'] { accent-color: #38bdf8; }
 </style>
