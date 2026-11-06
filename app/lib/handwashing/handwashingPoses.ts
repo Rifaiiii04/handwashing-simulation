@@ -116,6 +116,55 @@ function smooth01(value: number): number {
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
+const MOVING_FINGERS = ["index", "middle", "ring", "pinky"] as const;
+const HAND_SIDES = ["right", "left"] as const;
+const BACK_NORMAL = [0, .965926, .258819] as const;
+
+/** Integrated, deterministic cadence: small tempo changes without phase jumps. */
+function scrubPhase(progress: number, turns: number): number {
+  const t = THREE.MathUtils.clamp(progress, 0, 1);
+  const tau = Math.PI * 2;
+  const phase = turns * (tau * t + .10 * Math.sin(tau * t) + .04 / 3 * Math.sin(3 * tau * t));
+  // Move briskly across the stroke, easing naturally at each reversal.
+  return phase + .12 * Math.sin(2 * phase);
+}
+
+/** Shared arm follow-through preserves the relative hand/finger contact. */
+function followContact(pose: StagePoseEvaluation, progress: number, weight: number,
+  normal: readonly [number, number, number] = PALM_SEP_AXIS): StagePoseEvaluation {
+  const lift = .004 * Math.sin(progress * Math.PI * 2) * weight;
+  const sway = .002 * Math.sin(progress * Math.PI * 4) * weight;
+  for (const side of HAND_SIDES) {
+    const offset = pose[side].palmOffset;
+    offset[0] += normal[0] * lift + sway;
+    offset[1] += normal[1] * lift;
+    offset[2] += normal[2] * lift;
+  }
+  return pose;
+}
+
+/** Gentle sequential flexion when fingers are free of the opposing hand/pump. */
+function freeFingerFollow(pose: StagePoseEvaluation, phase: number, weight: number, amplitude: number): void {
+  if (weight <= 0) return;
+  for (const side of HAND_SIDES) {
+    const hand = pose[side];
+    const lag = side === "left" ? .65 : 0;
+    hand.wristEulerDeg[0] += .7 * Math.sin(phase - lag - .4) * weight;
+    for (let i = 0; i < MOVING_FINGERS.length; i++) {
+      const finger = hand.fingers[MOVING_FINGERS[i]!];
+      const ripple = Math.sin(phase - lag - i * .55) * weight * amplitude;
+      if (finger.jointCurls) {
+        const j = finger.jointCurls;
+        finger.jointCurls = [j[0]!, j[1]! + ripple * .3, j[2]! + ripple * .65, j[3]! + ripple * .4];
+      } else {
+        finger.curl += ripple;
+      }
+    }
+    const thumb = hand.fingers.thumb;
+    if (!thumb.jointCurls) thumb.curl += .3 * amplitude * Math.sin(phase - lag + .5) * weight;
+  }
+}
+
 const blendEuler = new THREE.Euler(0, 0, 0, "ZXY");
 const blendQuatA = new THREE.Quaternion();
 const blendQuatB = new THREE.Quaternion();
@@ -471,8 +520,8 @@ function evaluatePalmContactOrbit(
       twist: rubPalmsLiveTuning.leftThumbTwist,
       jointCurls: [
         rubPalmsLiveTuning.leftThumbBaseCurl,
-        rubPalmsLiveTuning.leftThumbMidCurl,
-        rubPalmsLiveTuning.leftThumbTipCurl,
+        rubPalmsLiveTuning.leftThumbMidCurl + Math.sin(theta - .35) * .6 * orbitWeight,
+        rubPalmsLiveTuning.leftThumbTipCurl + Math.sin(theta - .6) * .35 * orbitWeight,
       ],
       jointSpreads: [
         rubPalmsLiveTuning.leftThumbBaseSpread,
@@ -597,12 +646,13 @@ function evaluateRubPalmsPose(progress: number): StagePoseEvaluation {
   const p = THREE.MathUtils.clamp(progress, 0, 1);
   const liveHintY = (rubPalmsLiveTuning.rightOffsetY + rubPalmsLiveTuning.leftOffsetY) * .5 + .015;
   // The dispenser return already joins the palms. Start rubbing in that same
-  // contact pose, with a gradual amplitude envelope and a steady, slower cadence.
+  // contact pose. Keep its orbit and flat fingertips; increase the cadence,
+  // varying the pace slightly while fading the stroke smoothly at both ends.
   const rampIn = smooth01(p / .10);
-  const rampOut = smooth01((.92 - p) / .10);
-  const theta = Math.min(p / .92, 1) * Math.PI * 2 * 5;
+  const rampOut = smooth01((1 - p) / .08);
+  const theta = scrubPhase(p, 14);
   const contact = evaluatePalmContactOrbit(theta, rampIn * rampOut);
-  return { ...contact, contactCenterHintOffset: [0, liveHintY, -.06] };
+  return followContact({ ...contact, contactCenterHintOffset: [0, liveHintY, -.06] }, p, rampIn * rampOut);
 }
 /**
  * Finger articulation tuning (degrees, relative to the calibrated rest pose).
@@ -662,17 +712,19 @@ const BACK_INTERLACED_FINGERS = {
   ],
 } as const;
 
-function backFingers(upper: boolean, left: boolean, pulse: number): Record<FingerName, FingerArticulationTarget> {
+function backFingers(upper: boolean, left: boolean, pulse: number, cycle = 0, weight = 0): Record<FingerName, FingerArticulationTarget> {
   const key = left ? (upper ? "leftUpper" : "leftLower") : (upper ? "rightUpper" : "rightLower");
   const rows = BACK_INTERLACED_FINGERS[key];
   const finger = (i: number): FingerArticulationTarget => {
     const row = rows[i]!;
+    const drag = Math.sin(cycle - .28 * i - (upper ? 0 : .35)) * weight;
     return { curl: 0, spread: 0, distalBias: 1,
-      jointCurls: [0, row[0] + pulse * (upper ? .25 : -.06), row[1], row[2]],
+      jointCurls: [0, row[0] + pulse * (upper ? .35 : -.09),
+        row[1] + drag * (upper ? .85 : .25), row[2] + drag * (upper ? .55 : .18)],
       jointSpreads: [0, row[3], row[4], row[5]] };
   };
   return {
-    thumb: { curl: -4, spread: 10, twist: 0 },
+    thumb: { curl: -4 + Math.sin(cycle - .4) * weight * .8, spread: 10, twist: 0 },
     index: finger(0), middle: finger(1), ring: finger(2), pinky: finger(3),
   };
 }
@@ -686,7 +738,7 @@ function backContact(leftOnTop: boolean, cycle = 0, weight = 0): StagePoseEvalua
     palmOffset: leftOnTop ? [-.17506, -.05616, -.14155] : [-.21506, .072299258, -.107129923],
     palmEulerDeg: [12.1996, -19.7866, 104.7162],
     wristEulerDeg: [0, 0, 0],
-    fingers: backFingers(!leftOnTop, false, pulse),
+    fingers: backFingers(!leftOnTop, false, pulse, cycle, weight),
   };
   const left: HandPoseTarget = {
     // Move the whole left hand half a finger lane, instead of bending every
@@ -694,7 +746,7 @@ function backContact(leftOnTop: boolean, cycle = 0, weight = 0): StagePoseEvalua
     palmOffset: leftOnTop ? [.12710, .08258148, -.06277638] : [.08710, -.04298, -.09642],
     palmEulerDeg: [2.73693, 12.06083, -123.0685],
     wristEulerDeg: [0, 0, 0],
-    fingers: backFingers(leftOnTop, true, pulse),
+    fingers: backFingers(leftOnTop, true, pulse, cycle, weight),
   };
   const upper = leftOnTop ? left : right;
   const lower = leftOnTop ? right : left;
@@ -722,12 +774,13 @@ function evaluateBacksPose(progress: number): StagePoseEvaluation {
     const arc = Math.sin(Math.PI * t);
     pose.right.palmOffset[0] += .18 * arc;
     pose.left.palmOffset[0] -= .18 * arc;
+    freeFingerFollow(pose, phase * Math.PI * 2, arc * arc * (lift / .20) ** 2, 1.8);
     return pose;
   }
   if (p < .43) {
     const t = (p - .14) / .29;
     const weight = smooth01(t / .15) * smooth01((1 - t) / .15);
-    return backContact(false, t * Math.PI * 4, weight);
+    return followContact(backContact(false, scrubPhase(t, 6), weight), p, weight, BACK_NORMAL);
   }
   if (p < .59) {
     const phase = (p - .43) / .16;
@@ -749,12 +802,13 @@ function evaluateBacksPose(progress: number): StagePoseEvaluation {
     const release = smooth01(arc);
     pose.right.fingers = lerpFingerTargets(pose.right.fingers, backFingers(false, false, 0), release);
     pose.left.fingers = lerpFingerTargets(pose.left.fingers, backFingers(false, true, 0), release);
+    freeFingerFollow(pose, phase * Math.PI * 2, arc * arc * (lift / .20) ** 2, 1.8);
     return pose;
   }
-  if (p < .92) {
-    const t = (p - .59) / .33;
-    const weight = smooth01(t / .15) * smooth01((1 - t) / .15);
-    return backContact(true, t * Math.PI * 4, weight);
+  if (p < 1) {
+    const t = (p - .59) / .41;
+    const weight = smooth01(t / .10) * smooth01((1 - t) / .10);
+    return followContact(backContact(true, scrubPhase(t, 8), weight), p, weight, BACK_NORMAL);
   }
   return backContact(true);
 }
@@ -839,13 +893,16 @@ function evaluateInterlacePose(progress: number): StagePoseEvaluation {
     const arc = Math.sin(Math.PI * t);
     pose.right.palmOffset[0] += .34 * arc;
     pose.left.palmOffset[0] -= .34 * arc;
+    freeFingerFollow(pose, phase * Math.PI * 2, arc * arc * (lift / .28) ** 2, 1.8);
     return pose;
   }
   if (p < .28) return blendPair(INTERLACE_ENTRY_POSE, interlaceContact(), smooth01((p - .20) / .08));
-  if (p < .94) {
-    const t = (p - .28) / .66;
-    const weight = smooth01(t / .10) * smooth01((1 - t) / .10);
-    return interlaceContact(t * Math.PI * 8, weight);
+  if (p < 1) {
+    const t = (p - .28) / .72;
+    const weight = smooth01(t / .10) * smooth01((1 - t) / .08);
+    // Retiming the fitted joint/hand frames together keeps the narrow finger
+    // contacts intact; independent finger noise would break this calibration.
+    return followContact(interlaceContact(scrubPhase(t, 13), weight), p, weight);
   }
   return interlaceContact();
 }
@@ -854,7 +911,7 @@ function evaluateInterlacePose(progress: number): StagePoseEvaluation {
  * Evaluates the procedural hand and finger pose targets for any stage at a given
  * normalized stage progress (0..1) and elapsed stage time (seconds).
  */
-export function evaluateStagePose(
+function evaluateBaseStagePose(
   stageId: HandwashingStageId,
   progress: number,
   elapsed: number,
@@ -998,24 +1055,25 @@ export function evaluateStagePose(
       // Right hand sits slightly higher, while Left hand sits comfortably lower (~5cm) in a natural layered
       // cradle, with an organic animation delay to completely eliminate pinky collision and unnatural rigidity.
       const wetWeight = smooth01(progress / .13) * smooth01((1 - progress) / .15);
-      const rWashTime = progress * Math.PI * 4;
+      // A slow rinse beneath the stream, without the brisk rubbing cadence.
+      const rWashTime = progress * Math.PI * 3;
       const rSin = Math.sin(rWashTime) * wetWeight;
       const rCos = Math.cos(rWashTime) * wetWeight;
 
-      const rSwayX = rSin * 0.018;
-      const rBobY = rCos * 0.010;
-      const rSurgeZ = rCos * 0.024;
-      const rCupBreath = rSin * 3;
+      const rSwayX = rSin * 0.005;
+      const rBobY = rCos * 0.003;
+      const rSurgeZ = rCos * 0.007;
+      const rCupBreath = rSin;
 
-      // Left hand follows with an organic delay (~1.0 rad / ~0.22s phase lag)
-      const lWashTime = rWashTime - 0.8;
+      // The receiving hand follows with a small phase lag.
+      const lWashTime = rWashTime - 0.6;
       const lSin = Math.sin(lWashTime) * wetWeight;
       const lCos = Math.cos(lWashTime) * wetWeight;
 
-      const lSwayX = lSin * 0.018;
-      const lBobY = lCos * 0.008;
-      const lSurgeZ = lCos * 0.022;
-      const lCupBreath = lSin * 3;
+      const lSwayX = lSin * 0.005;
+      const lBobY = lCos * 0.0025;
+      const lSurgeZ = lCos * 0.006;
+      const lCupBreath = lSin;
 
       const rBaseOff = [-0.016, 0.038, -0.060];
       const lBaseOff = [-0.036, -0.012, -0.058];
@@ -1027,8 +1085,8 @@ export function evaluateStagePose(
             rBaseOff[1] + rBobY,
             rBaseOff[2] + rSurgeZ,
           ],
-          palmEulerDeg: [8 + rCos * 3, -5 + rSin * 3, -66 + rSin * 12],
-          wristEulerDeg: [rCos * 1.5, 0, 0],
+          palmEulerDeg: [8 + rCos, -5 + rSin, -66 + rSin * 3],
+          wristEulerDeg: [rCos * .45, 0, 0],
           fingers: {
             thumb: { curl: -4 + rCupBreath * 0.2, spread: -3, distalBias: 1.0 },
             index: { curl: 12 + rCupBreath, spread: 0.1, distalBias: 1.0 },
@@ -1043,8 +1101,8 @@ export function evaluateStagePose(
             lBaseOff[1] + lBobY,
             lBaseOff[2] + lSurgeZ,
           ],
-          palmEulerDeg: [10 + lCos * 3, -2 - lSin * 3, 46 - lSin * 12],
-          wristEulerDeg: [lCos * 1.5, 0, 0],
+          palmEulerDeg: [10 + lCos, -2 - lSin, 46 - lSin * 3],
+          wristEulerDeg: [lCos * .45, 0, 0],
           fingers: {
             thumb: { curl: -4 + lCupBreath * 0.2, spread: -3, distalBias: 1.0 },
             index: { curl: 12 + lCupBreath, spread: 0.1, distalBias: 1.0 },
@@ -1454,4 +1512,30 @@ export function evaluateStagePose(
       };
     }
   }
+}
+
+export function evaluateStagePose(
+  stageId: HandwashingStageId,
+  progress: number,
+  elapsed: number,
+  anchors: HandPoseSceneAnchors,
+): StagePoseEvaluation {
+  const p = THREE.MathUtils.clamp(progress, 0, 1);
+  const pose = evaluateBaseStagePose(stageId, p, elapsed, anchors);
+  if (stageId === "moveHandsToFaucet") {
+    // Settle the free opening gesture before the hands converge under water.
+    const opening = Math.sin(Math.PI * p) ** 2 * (1 - smooth01((p - .18) / .14));
+    freeFingerFollow(pose, p * Math.PI * 2, opening, 2.4);
+  } else if (stageId === "wetHands") {
+    const weight = smooth01(p / .13) * smooth01((1 - p) / .15);
+    freeFingerFollow(pose, p * Math.PI * 3 + .35, weight * .4, 1);
+  } else if (stageId === "dispenseSoap") {
+    // Keep pump contact exact. Flex only on the free reach/return arcs and
+    // settle before joining the calibrated palm-rubbing pose.
+    const reach = p < .28 ? p / .28 : -1;
+    const returning = p > .68 && p < .94 ? (p - .68) / .26 : -1;
+    const phase = reach >= 0 ? reach : returning;
+    if (phase >= 0) freeFingerFollow(pose, phase * Math.PI * 2, Math.sin(Math.PI * phase) ** 2, 2.2);
+  }
+  return pose;
 }

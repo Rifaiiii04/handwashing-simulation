@@ -79,6 +79,8 @@ export interface HandwashingSystemConfig {
   readonly dispenser: SoapDispenserConfig;
   readonly poseDampingLambda: number;
   readonly boneDampingLambda: number;
+  /** Matched hand/bone response for faster, tightly fitted rubbing motions. */
+  readonly contactDampingLambda: number;
   readonly foamDampingLambda: number;
   readonly autoLoopDemo: boolean;
   readonly enableRigDiagnostics: boolean;
@@ -141,15 +143,15 @@ export const HANDWASHING_STAGES: readonly HandwashingStageConfig[] = [
     label: "Langkah 1 · Gosok Kedua Telapak dengan Arah Memutar",
     shortLabel: "1d. Gosok Telapak",
     description:
-      "Bersihkan tangan, gosok sabun pada kedua telapak dengan arah memutar hingga seluruh permukaan telapak terlapisi busa.",
+      "Gosok sabun pada kedua telapak dengan gerakan memutar yang cepat dan lembut.",
     whoStep: 1,
     duration: 10.0,
     blendDuration: 0.45,
     faucetActive: false,
-    foamStart: 0.18,
-    foamEnd: 0.95,
-    particleMode: "foam",
-    particleIntensity: 0.38,
+    foamStart: .18,
+    foamEnd: .95,
+    particleMode: "none",
+    particleIntensity: 0,
     triggersPump: false,
     emitsSoap: false,
   },
@@ -163,7 +165,7 @@ export const HANDWASHING_STAGES: readonly HandwashingStageConfig[] = [
     duration: 12.0,
     blendDuration: 0.5,
     faucetActive: false,
-    foamStart: 0.95,
+    foamStart: .95,
     foamEnd: 0.95,
     particleMode: "foam",
     particleIntensity: 0.32,
@@ -227,6 +229,7 @@ export const DEFAULT_HANDWASHING_CONFIG: HandwashingSystemConfig = {
   dispenser: DEFAULT_SOAP_DISPENSER_CONFIG,
   poseDampingLambda: 11.5,
   boneDampingLambda: 13.0,
+  contactDampingLambda: 28,
   foamDampingLambda: 6.5,
   autoLoopDemo: false,
   enableRigDiagnostics: false,

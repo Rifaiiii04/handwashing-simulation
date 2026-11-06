@@ -88,7 +88,20 @@ advance(c, c.state.stageDuration * 0.12);
 assert.equal(c.state.soapBlobVisible, true);
 advance(c, c.state.stageDuration * 0.15);
 assert.equal(c.state.soapBlobVisible, false);
-assert(c.state.foamIntensity > 0);
+assert(c.state.foamIntensity > .3, 'palmar rubbing builds visible lather on the facing palms');
+assert.equal(c.state.particleMode, 'none', 'palmar foam stays attached to the skin without a spray');
+
+// Seeking backwards must also clear lather from a later stage immediately.
+for (const stage of HANDWASHING_STAGES.filter(stage => stage.whoStep === 1 && stage.id !== 'rubPalms')) {
+  c.goToStage('interlaceFingers', false);
+  c.seek(.6);
+  c.goToStage(stage.id, false);
+  for (const p of [0, .12, .4, .75, 1]) {
+    c.seek(p);
+    assert.equal(c.state.foamIntensity, 0, `no early foam during ${stage.id} at ${p}`);
+    assert.notEqual(c.state.particleMode, 'foam');
+  }
+}
 
 if (HANDWASHING_STAGES.some(stage => stage.id === 'rubBacksOfHands')) {
   c.goToStage('rubBacksOfHands', true);
@@ -96,7 +109,9 @@ if (HANDWASHING_STAGES.some(stage => stage.id === 'rubBacksOfHands')) {
   assert.equal(c.state.whoStep, 2);
   assert.equal(c.state.soapBlobVisible, false);
   assert.equal(c.state.faucetActive, false);
-  assert(c.state.foamIntensity > 0.5, 'step two preserves lather');
+  assert(c.state.foamIntensity > .9, 'the dorsal approach retains the lather already on the palms');
+  advance(c, 3.8);
+  assert(c.state.foamIntensity > .9, 'lather persists as dorsal rubbing begins');
 }
 c.goToStage('interlaceFingers', true);
 advance(c, 1);
@@ -142,12 +157,42 @@ for (const fps of [30, 60, 144]) {
   assert(Math.abs(timed.state.stageElapsed - 0.2) < 1e-8);
   assert.equal(timed.state.soapBlobVisible, false);
 }
-console.log('PASS: approach effects, soap/pump timing, pause/reset, step-two lather, overflow, completion and loop at 30/60/144 FPS.');
+console.log('PASS: approach effects, soap/pump timing, palmar lather onset and persistence into dorsal rubbing, pause/reset, overflow, completion and loop at 30/60/144 FPS.');
 
 const mapped = await loadedController();
 const rig = mapped.getRig();
 const anchors = { pumpStroke: mapped.config.dispenser.pumpStroke, pumpPressProgress: 0 };
 const world = bone => bone.getWorldPosition(new THREE.Vector3());
+
+// Measure complete scrub cycles from the authored hand motion, not from a
+// particular sine/cadence implementation. Shared arm sway cancels out.
+for (const [stageId, start, end, axis] of [
+  ['rubPalms', .10, .92, [0, .083618, -.996498]],
+  ['rubBacksOfHands', .14, .43, [0, .258819, -.965926]],
+  ['rubBacksOfHands', .59, 1, [0, .258819, -.965926]],
+  ['interlaceFingers', .352, .9424, [0, .083618, -.996498]],
+]) {
+  const duration = HANDWASHING_STAGES.find(stage => stage.id === stageId).duration;
+  const direction = new THREE.Vector3(...axis), difference = new THREE.Vector3();
+  const longitudinal = p => {
+    const pose = evaluateStagePose(stageId, p, p * duration, anchors);
+    return difference.fromArray(pose.right.palmOffset).sub(new THREE.Vector3(...pose.left.palmOffset)).dot(direction);
+  };
+  const center = longitudinal(stageId === 'rubBacksOfHands' ? end : 1);
+  const crossings = [];
+  let previous = longitudinal(start) - center;
+  for (let i = 1; i <= 1200; i++) {
+    const p = start + (end - start) * i / 1200, value = longitudinal(p) - center;
+    if (previous < 0 && value >= 0) crossings.push(p * duration);
+    previous = value;
+  }
+  assert(crossings.length >= 4, `${stageId}: sustained rubbing rather than a few slow gestures`);
+  const periods = crossings.slice(1).map((time, i) => time - crossings[i]);
+  const frequency = periods.length / periods.reduce((a, b) => a + b, 0);
+  assert(frequency > 1.1 && frequency < 2.2, `${stageId}: brisk, controlled rubbing cadence`);
+  assert(Math.max(...periods) / Math.min(...periods) > 1.04, `${stageId}: gentle variation between scrub cycles`);
+  console.log(`MEASURE: ${stageId} ${start}..${end}, ${frequency.toFixed(2)} complete scrub cycles/second.`);
+}
 // Measured visible skin extent along each terminal bone's local +Y axis.
 // A terminal bone marks the DIP joint, so its origin is not the visible tip.
 const visibleFingerTipLocalY = {
@@ -388,14 +433,11 @@ for (const stage of HANDWASHING_STAGES) {
     baked[side].filter(item => item.source.geometry.attributes.position.count > 500).map(item => item.mesh),
   ]));
   const nearest = [new THREE.Vector3(), new THREE.Vector3()], across = new THREE.Vector3();
-  for (let sample = 0; sample <= 32; sample++) {
-    apply('interlaceFingers', .28 + .66 * sample / 32);
-    bakeCurrentSkin();
-    center.addVectors(rig.right.currentPalmWorld, rig.left.currentPalmWorld).multiplyScalar(.5);
+  function neighborSkinGaps() {
     const fingerChains = Object.fromEntries(['right', 'left'].map(side => [side,
       fingerNames.map(name => rig[side].fingers[name].joints.slice(1).map(j => world(j.bone))),
     ]));
-    for (const [pairIndex, [r, l]] of contactPairs.entries()) {
+    return contactPairs.map(([r, l]) => {
       let minimum = Infinity;
       for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++) {
         const d = finiteSegmentDistance(fingerChains.right[r][j], fingerChains.right[r][j + 1],
@@ -409,9 +451,17 @@ for (const stage of HANDWASHING_STAGES) {
         if (rightSkin !== undefined && leftSkin !== undefined) minimum = Math.min(minimum, d - rightSkin - leftSkin);
       }
       assert(Number.isFinite(minimum), 'every interlaced neighbor pair has a measurable skin contact');
-      sideContacts[pairIndex].min = Math.min(sideContacts[pairIndex].min, minimum);
-      sideContacts[pairIndex].max = Math.max(sideContacts[pairIndex].max, minimum);
-    }
+      return minimum;
+    });
+  }
+  for (let sample = 0; sample <= 32; sample++) {
+    apply('interlaceFingers', .28 + .72 * sample / 32);
+    bakeCurrentSkin();
+    center.addVectors(rig.right.currentPalmWorld, rig.left.currentPalmWorld).multiplyScalar(.5);
+    neighborSkinGaps().forEach((gap, i) => {
+      sideContacts[i].min = Math.min(sideContacts[i].min, gap);
+      sideContacts[i].max = Math.max(sideContacts[i].max, gap);
+    });
     for (const x of [-.035, 0, .035]) for (const z of [-.025, 0, .035]) {
       const gap = skinGap(x, z);
       assert(gap !== null && gap >= 0, 'palmar interlacing keeps the central palm surfaces clear');
@@ -454,6 +504,23 @@ for (const stage of HANDWASHING_STAGES) {
   }
   assert(entrySamples > 100 && entrySkinMin >= 0, 'sampled skin clears during withdrawal, finger insertion and tightening into step three');
   console.log(`MEASURE: step-three entry skin clearance ${(entrySkinMin * 1000).toFixed(3)} scene mm across ${entrySamples} overlapping samples.`);
+  // Fast playback includes damping; seeking directly to a clear pose alone
+  // cannot detect a hand lagging behind its independently filtered fingers.
+  for (const fps of [30, 60, 144]) {
+    mapped.goToStage('interlaceFingers', true);
+    let min = Infinity, max = -Infinity, samples = 0;
+    for (let frame = 1; frame < fps * 12; frame++) {
+      mapped.update(1 / fps);
+      if (mapped.state.stageProgress < .30 || frame % Math.round(fps / 8) !== 0) continue;
+      bakeCurrentSkin();
+      for (const gap of neighborSkinGaps()) {
+        min = Math.min(min, gap); max = Math.max(max, gap); samples++;
+      }
+    }
+    mapped.pause();
+    assert(samples > 100 && min >= 0 && max < .006, `${fps} FPS playback retains close, nonpenetrating interlaced side contacts`);
+    console.log(`MEASURE: ${fps} FPS playback, seven side-contact skin gaps ${(min * 1000).toFixed(3)}..${(max * 1000).toFixed(3)} scene mm.`);
+  }
   for (const side of ['right', 'left']) for (const { mesh } of baked[side]) mesh.geometry.dispose();
   material.dispose();
 }
@@ -502,7 +569,7 @@ const backEndpoint = snapshot();
 apply('interlaceFingers', 0);
 assert(maxDistance(backEndpoint, snapshot()) < 1e-7, 'step three begins at the exact final pose of step two');
 
-for (const [stage, boundaries] of [['dispenseSoap', [.68]], ['rubPalms', [0, 0.10, .82, .92]], ['rubBacksOfHands', [.035, .105, .14, .43, .47, .55, .59, .92]], ['interlaceFingers', [.044, .128, .14, .20, .28, .346, .874, .94]]]) {
+for (const [stage, boundaries] of [['dispenseSoap', [.28, .68, .94]], ['rubPalms', [0, .10, .92, 1]], ['rubBacksOfHands', [.035, .105, .14, .43, .47, .55, .59, .959, 1]], ['interlaceFingers', [.044, .128, .14, .20, .28, .352, .9424, 1]]]) {
   for (const boundary of boundaries) {
     apply(stage, boundary - 1e-6);
     const before = snapshot();
@@ -571,7 +638,7 @@ assert(Math.abs(rig.right.currentPalmWorld.x - rig.left.currentPalmWorld.x) > 0.
   singleBind.dispose();
   parentBind.dispose();
   const capsuleWindows = [];
-  for (const [start, end] of [[0.14, 0.43], [0.59, 0.92]]) {
+  for (const [start, end] of [[0.14, 0.43], [0.59, 1]]) {
     let minimum = Infinity;
     let worst = null;
     let comparisons = 0;
@@ -655,6 +722,7 @@ assert(Math.abs(rig.right.currentPalmWorld.x - rig.left.currentPalmWorld.x) > 0.
     console.log(`MEASURE: dorsum window ${start}..${end}, ${comparisons} finite-segment capsule comparisons including fingertips; minimum ${(minimum * 1000).toFixed(3)} scene mm at ${JSON.stringify(worst)}.`);
     console.log(`MEASURE: open-hand width ratio ${maxWidthRatio.toFixed(3)}, largest phalanx bend ${THREE.MathUtils.radToDeg(maxBend).toFixed(2)} degrees; scrub travel ${((strokeRange.upper[1] - strokeRange.upper[0]) * 1000).toFixed(2)} scene mm.`);
     console.log(`MEASURE: interlaced distal-joint lane margin ${(minLaneMargin * 1000).toFixed(2)} scene mm; maximum fingertip distance from the lower finger plane ${(maxTipPlaneGap * 1000).toFixed(2)} scene mm.`);
+    assert(maxBend > THREE.MathUtils.degToRad(.5), 'dorsal rubbing includes gentle phalanx flexion instead of rigid fingers');
     assert(strokeRange.upper[1] - strokeRange.upper[0] > .06, 'scrubbing has visible longitudinal travel');
     assert(strokeRange.lower[1] - strokeRange.lower[0] < .006, 'supporting hand stays steady during scrubbing');
     capsuleWindows.push({ start, end, minimum });

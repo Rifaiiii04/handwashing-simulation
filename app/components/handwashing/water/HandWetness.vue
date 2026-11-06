@@ -243,14 +243,13 @@ function updateFoamPuffs(frame: WaterFrameState, intensity: number): void {
   foamPuffs.count = activeCount;
   const isBacksStage = frame.stageId === "rubBacksOfHands";
   const keepDorsalLather = frame.stageId === "interlaceFingers";
-  const palmEdgeLather = frame.stageId === "rubPalms"
-    ? .85 * THREE.MathUtils.smoothstep(clampedIntensity, .12, .65) : 0;
+  // Palmar rubbing never paints the backs, including their outer edges.
   const leftDorsalCoverage = keepDorsalLather ? 1 : isBacksStage
     ? THREE.MathUtils.smoothstep(frame.stageProgress, 0.14, 0.29)
     : 0;
   const rightDorsalCoverage = keepDorsalLather ? 1 : isBacksStage
     ? THREE.MathUtils.smoothstep(frame.stageProgress, 0.59, 0.74)
-    : palmEdgeLather;
+    : 0;
   dorsalFoamPuffs.visible = leftDorsalCoverage > 0 || rightDorsalCoverage > 0;
   dorsalFoamPuffs.count = activeCount;
 
@@ -315,10 +314,8 @@ function updateFoamPuffs(frame: WaterFrameState, intensity: number): void {
     foamPuffs.setMatrixAt(index, instanceMatrix);
 
     if (dorsalFoamPuffs.visible) {
-      // Lather squeezed out of palm contact wraps around the outer edges.
-      // Keep the center of each back clear until the dorsum-rubbing technique.
-      const edgeMask = isBacksStage || keepDorsalLather || puff.radialOrder > .48 ? 1 : 0;
-      const coverage = (isLeft ? leftDorsalCoverage : rightDorsalCoverage) * edgeMask;
+      // Only the back being rubbed gains coverage; retain it after swapping.
+      const coverage = isLeft ? leftDorsalCoverage : rightDorsalCoverage;
       const palmCenter = isLeft ? frame.leftPalmWorld : frame.rightPalmWorld;
       scratchDorsalNormal.copy(normal).negate();
       scratchPosition

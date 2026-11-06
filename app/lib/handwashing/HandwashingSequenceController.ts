@@ -472,7 +472,7 @@ export class HandwashingSequenceController {
         }
       }
     } else if (stage.id === "rubPalms" && progress < 0.16) {
-      // Substage A & B (0..0.16): dollop flattens and dissolves into lather as palms meet
+      // The liquid soap flattens and spreads into lather on the facing palms.
       this.state.soapBlobVisible = true;
       if (progress <= 0.08) {
         this.state.soapBlobProgress = 0.80;
@@ -487,8 +487,8 @@ export class HandwashingSequenceController {
 
     let stageFoamTarget: number;
     if (stage.id === "rubPalms") {
-      // Palms are already joined when this stage begins. Lather grows with
-      // the first circles instead of waiting through another joining phase.
+      // Palm lather grows during the first circles. HandWetness adds dorsal
+      // coverage separately when each back is rubbed during step two.
       stageFoamTarget = THREE.MathUtils.lerp(stage.foamStart, stage.foamEnd,
         THREE.MathUtils.smoothstep(progress, 0, .65));
     } else {
@@ -519,7 +519,7 @@ export class HandwashingSequenceController {
     if (stage.id !== "moveHandsToFaucet") {
       this.state.particleMode = stage.particleMode;
       this.state.particleIntensity = stage.particleMode === "foam"
-        ? stage.particleIntensity * Math.max(0.25, this.state.foamIntensity)
+        ? stage.particleIntensity * this.state.foamIntensity
         : stage.particleIntensity;
     }
   }
@@ -581,11 +581,15 @@ export class HandwashingSequenceController {
         pumpPressProgress: this.state.pumpPressProgress,
       },
     );
+    // Different hand/bone filters made the fast stroke lag behind its fingers.
+    // Use a matched response during rubbing, retaining the gentler reach filter.
+    const contactMotion = activeStage.id === "rubPalms"
+      || activeStage.id === "rubBacksOfHands" || activeStage.id === "interlaceFingers";
     this.handAnimator.applyPose(
       evaluation,
       completedThisFrame || (this.stagePoseDirty && (!this.state.isPlaying || this.debug.enabled)) ? 0 : safeDelta,
-      this.config.poseDampingLambda,
-      this.config.boneDampingLambda,
+      contactMotion ? this.config.contactDampingLambda : this.config.poseDampingLambda,
+      contactMotion ? this.config.contactDampingLambda : this.config.boneDampingLambda,
       this.debug.enabled ? this.debugStages[activeStage.id] : undefined,
     );
     this.stagePoseDirty = false;

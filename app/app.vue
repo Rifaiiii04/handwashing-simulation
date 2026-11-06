@@ -38,7 +38,7 @@ const stageGroups = [
 const stageGuidance = computed(() => {
   if (seqState.stageId === 'interlaceFingers') {
     if (seqState.stageProgress < .28) return 'Hadapkan kedua telapak, buka sela jari, lalu masukkan dan lengkungkan jari seperti menggenggam longgar.'
-    if (seqState.stageProgress < .94) return 'Jaga sisi jari saling bersentuhan saat menggosok maju–mundur. Bagian tengah telapak boleh berjarak.'
+    if (seqState.stageProgress < 1) return 'Jaga sisi jari saling bersentuhan saat menggosok maju–mundur. Bagian tengah telapak boleh berjarak.'
     return 'Sela-sela jari sudah digosok dari sisi telapak. Ulangi untuk mengamati gerakannya.'
   }
   if (seqState.stageId !== 'rubBacksOfHands') return seqState.stageDescription
@@ -46,7 +46,7 @@ const stageGuidance = computed(() => {
   if (progress < 0.14) return 'Letakkan telapak kanan di atas punggung tangan kiri, dengan jari saling menyela.'
   if (progress < 0.43) return 'Gosok punggung tangan kiri dengan telapak kanan. Gerakkan jari di sela jari tangan kiri.'
   if (progress < 0.59) return 'Lepaskan jari perlahan, lalu tukar posisi kedua tangan.'
-  if (progress < 0.92) return 'Gosok punggung tangan kanan dengan telapak kiri. Jari kembali saling menyela.'
+  if (progress < 1) return 'Gosok punggung tangan kanan dengan telapak kiri. Jari kembali saling menyela.'
   return 'Kedua punggung tangan sudah digosok bergantian. Berikutnya, hadapkan telapak untuk menggosok sela-sela jari.'
 })
 
