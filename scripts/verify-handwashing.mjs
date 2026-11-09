@@ -8,6 +8,7 @@ const jiti = createJiti(import.meta.url, { fsCache: false });
 const { HandwashingSequenceController } = await jiti.import('../app/lib/handwashing/HandwashingSequenceController.ts');
 const { HANDWASHING_STAGES } = await jiti.import('../app/lib/handwashing/handwashingConfig.ts');
 const { evaluateStagePose } = await jiti.import('../app/lib/handwashing/handwashingPoses.ts');
+const { HANDWASHING_SECTIONS } = await jiti.import('../app/lib/handwashing/handwashingStepsData.ts');
 
 // Run with: node scripts/verify-handwashing.mjs
 // Geometry/skeleton checks use the actual GLB. Textures are irrelevant to these
@@ -860,7 +861,7 @@ for (const fps of [30, 60, 144]) {
   controller.play();
   const samples = [];
   let elapsed = 0;
-  for (const seconds of [1, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 35.5, 37, 39, 42, 45, 46.6]) {
+  for (const seconds of [1, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 35.5, 37, 39, 42, 45, 46.6, 49, 52, 56, 59, 62, 66, 70, 73, 76, 80, 84, 86.6]) {
     advance(controller, seconds - elapsed, fps);
     elapsed = seconds;
     const pair = controller.getRig();
@@ -873,15 +874,20 @@ for (const fps of [30, 60, 144]) {
   trajectories.push(samples);
 }
 let maxTrajectoryDifference = 0;
+let worstTrajectory;
 for (const samples of trajectories.slice(1)) {
   samples.forEach((sample, i) => {
     const reference = trajectories[0][i];
     assert.equal(sample.stageId, reference.stageId);
     assert(Math.abs(sample.elapsed - reference.elapsed) < 1e-7, 'identical elapsed time across frame rates');
-    maxTrajectoryDifference = Math.max(maxTrajectoryDifference, maxDistance(sample.points, reference.points));
+    const difference = maxDistance(sample.points, reference.points);
+    if (difference > maxTrajectoryDifference) {
+      maxTrajectoryDifference = difference;
+      worstTrajectory = { stage: sample.stageId, elapsed: sample.elapsed, sample: i };
+    }
   });
 }
-assert(maxTrajectoryDifference < 0.025, 'skeletal trajectory frame-rate difference stays below 2.5 scene cm');
+assert(maxTrajectoryDifference < 0.025, `skeletal trajectory frame-rate difference stays below 2.5 scene cm (${maxTrajectoryDifference}, ${JSON.stringify(worstTrajectory)})`);
 console.log(`PASS: 30/60/144 FPS trajectories; largest sampled difference ${(maxTrajectoryDifference * 1000).toFixed(2)} scene mm.`);
 
 // A background-tab delay is clamped; pause freezes even bound skeletal poses.
@@ -983,7 +989,44 @@ console.log('PASS: background-tab delta clamp, invalid delta handling and bound-
   debugController.seek(.999);
   debugController.play();
   advance(debugController, 1);
-  assert.equal(debugController.state.isPlaying, false, 'the final implemented step completes normally');
+  assert.equal(debugController.state.stageId, 'rubBacksOfFingers', 'step three continues into step four');
+  debugController.goToStage('rubFingertips', false);
+  debugController.seek(.999);
+  debugController.play();
+  advance(debugController, 1);
+  assert.equal(debugController.state.isPlaying, false, 'the sixth technique completes normally');
   debugController.dispose();
 }
 console.log('PASS: debug world/local overrides, exact seek, snapshots, inspection selection, validated JSON roundtrip, atomic invalid import, reset/disable restoration, speed and stage loop.');
+
+// Steps four through six use authored joint channels and the existing controller.
+// Check the actual rig at phase boundaries, including the last calibrated pose
+// of step three; no mesh/IK solver is involved in playback.
+const lateStages = ['rubBacksOfFingers', 'rubThumbs', 'rubFingertips'];
+for (const [i, id] of lateStages.entries()) {
+  const stage = HANDWASHING_STAGES.find(s => s.id === id);
+  assert.equal(stage.whoStep, i + 4);
+  const section = HANDWASHING_SECTIONS.find(s => s.whoStepNumber === i + 4);
+  assert(section.enabled && HANDWASHING_STAGES[section.startStageIndex].id === id);
+  assert.equal(section.startStageIndex, section.endStageIndex);
+  c.goToStage(id, false);
+  c.seek(.35);
+  assert(c.state.foamIntensity > .9);
+  assert.equal(c.state.faucetActive, false);
+  assert.equal(c.state.pumpPressProgress, 0);
+  assert.equal(c.state.soapBlobVisible, false);
+  for (const p of id === 'rubBacksOfFingers' ? [0, .12, .26, .46, .66, 1] : [0, .16, .43, .61, 1]) {
+    apply(id, Math.max(0, p - 1e-6)); const before = snapshot();
+    apply(id, Math.min(1, p + 1e-6));
+    assert(maxDistance(before, snapshot()) < .0002, `${id}: continuous substage at ${p}`);
+  }
+}
+for (const [before, after] of [['interlaceFingers', lateStages[0]], [lateStages[0], lateStages[1]], [lateStages[1], lateStages[2]]]) {
+  apply(before, 1); const end = snapshot();
+  apply(after, 0);
+  assert(maxDistance(end, snapshot()) < 1e-6, `${before} -> ${after}: pose handoff within floating-point precision`);
+}
+
+// Baked XYZ channels require anatomical and skin-based checks, rather than
+// raw curl thresholds or nearest-vertex contact. Keep these on the real GLB.
+await import('./verify-handwashing-contact.mjs');

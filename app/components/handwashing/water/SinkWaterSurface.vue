@@ -223,7 +223,8 @@ const effect: WaterEffect = {
     if (!frame.ready || !waterMesh) return;
 
     waterMesh.updateWorldMatrix(true, false);
-    localImpact.copy(frame.origin);
+    // Use the landing point, including redirected runoff, rather than the spout.
+    localImpact.copy(frame.streamEnd);
     waterMesh.worldToLocal(localImpact);
     waterMesh.getWorldScale(worldScale);
     const amplitude = runtime.config.surfaceWaveWorldAmplitude / Math.max(0.02, Math.abs(worldScale.y));
@@ -241,6 +242,9 @@ const effect: WaterEffect = {
       localImpact,
       impactRadius,
       amplitude,
+      // Keep the existing animated ripples visible throughout every step,
+      // including when the faucet is off or the hand animation is paused.
+      1,
     );
   },
   dispose() {

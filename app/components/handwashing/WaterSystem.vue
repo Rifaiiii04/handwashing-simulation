@@ -38,6 +38,7 @@ const streamEndpointLocal = new THREE.Vector3();
 let streamReady = false;
 let referencesReady = false;
 let warnedMissingNodes = false;
+let lastResetToken = -1;
 const emitterQuaternion = new THREE.Quaternion();
 const localEmitterPoint = new THREE.Vector3();
 const foamBounds = new THREE.Box3();
@@ -278,6 +279,16 @@ function initSceneReferences(): void {
 
 watch(() => scene.value, initSceneReferences, { immediate: true });
 
+// Soft overlap with each palm keeps the jet from snapping between the basin
+// and a hand, or stopping at the height of a distant, non-intercepting palm.
+function palmStreamWeight(palm: THREE.Vector3, normal: THREE.Vector3): number {
+  const distance = Math.hypot(palm.x - frame.origin.x, palm.z - frame.origin.z);
+  const surfaceY = palm.y + Math.abs(normal.y) * 0.072;
+  return (1 - THREE.MathUtils.smoothstep(distance, 0.16, 0.24))
+    * THREE.MathUtils.smoothstep(frame.origin.y - surfaceY, 0.02, 0.08)
+    * THREE.MathUtils.smoothstep(surfaceY - frame.streamEnd.y, 0.02, 0.08);
+}
+
 const { onBeforeRender } = useLoop();
 onBeforeRender(({ delta }) => {
   if (!frame.ready) initSceneReferences();
@@ -309,6 +320,12 @@ onBeforeRender(({ delta }) => {
   frame.soapBlobVisible = seqState.soapBlobVisible;
   frame.soapBlobProgress = seqState.soapBlobProgress;
   frame.resetToken = seqState.resetToken;
+  if (frame.resetToken !== lastResetToken) {
+    lastResetToken = frame.resetToken;
+    frame.handContactFactor = 0;
+    frame.handsIntersectingStream = false;
+    frame.handImpactPoint.copy(frame.streamEnd);
+  }
 
   if (handRig) {
     frame.foamWorldCenter.copy(handRig.contactWorldCenter);
@@ -330,15 +347,9 @@ onBeforeRender(({ delta }) => {
     frame.streamEnd.copy(streamEndpointLocal);
     sinkWaterSurface.localToWorld(frame.streamEnd);
 
-    const dx = frame.foamWorldCenter.x - frame.origin.x;
-    const dz = frame.foamWorldCenter.z - frame.origin.z;
-    const distXZ = Math.hypot(dx, dz);
-    const isHeightIntercepted =
-      frame.foamWorldCenter.y < frame.origin.y - 0.08 &&
-      frame.foamWorldCenter.y > frame.streamEnd.y + 0.08;
-    const streamIntercepted = seqState.faucetActive && distXZ < 0.22 && isHeightIntercepted;
-
-    const targetFactor = streamIntercepted ? 1.0 : 0.0;
+    const rightWeight = palmStreamWeight(frame.rightPalmWorld, frame.rightPalmNormal);
+    const leftWeight = palmStreamWeight(frame.leftPalmWorld, frame.leftPalmNormal);
+    const targetFactor = seqState.faucetActive ? Math.max(rightWeight, leftWeight) : 0;
     frame.handContactFactor = THREE.MathUtils.damp(
       frame.handContactFactor,
       targetFactor,
@@ -349,13 +360,15 @@ onBeforeRender(({ delta }) => {
 
     // Follow the corrected skeletal palm anchors. This is a broad palm-surface
     // approximation; the detailed water system still handles runoff downstream.
-    const wetSurfaceY = Math.max(
-      frame.rightPalmWorld.y + Math.abs(frame.rightPalmNormal.y) * 0.072,
-      frame.leftPalmWorld.y + Math.abs(frame.leftPalmNormal.y) * 0.072,
-    );
+    const totalWeight = rightWeight + leftWeight;
+    const rightSurfaceY = frame.rightPalmWorld.y + Math.abs(frame.rightPalmNormal.y) * 0.072;
+    const leftSurfaceY = frame.leftPalmWorld.y + Math.abs(frame.leftPalmNormal.y) * 0.072;
+    const wetSurfaceY = totalWeight > 0.0001
+      ? (rightSurfaceY * rightWeight + leftSurfaceY * leftWeight) / totalWeight
+      : frame.handImpactPoint.y;
     frame.handImpactPoint.set(
       frame.origin.x,
-      wetSurfaceY,
+      THREE.MathUtils.clamp(wetSurfaceY, frame.streamEnd.y, frame.origin.y),
       frame.origin.z,
     );
 
@@ -367,11 +380,7 @@ onBeforeRender(({ delta }) => {
     );
 
     if (seqState.particleMode === "water" && seqState.faucetActive) {
-      if (frame.handsIntersectingStream) {
-        frame.splashOrigin.copy(frame.handImpactPoint);
-      } else {
-        frame.splashOrigin.copy(frame.streamEnd);
-      }
+      frame.splashOrigin.lerpVectors(frame.streamEnd, frame.handImpactPoint, frame.handContactFactor);
       frame.splashActive = seqState.particleIntensity > 0.005;
     } else if (seqState.particleMode === "foam") {
       frame.splashOrigin.copy(frame.foamWorldCenter);

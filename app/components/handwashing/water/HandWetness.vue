@@ -242,7 +242,9 @@ function updateFoamPuffs(frame: WaterFrameState, intensity: number): void {
   );
   foamPuffs.count = activeCount;
   const isBacksStage = frame.stageId === "rubBacksOfHands";
-  const keepDorsalLather = frame.stageId === "interlaceFingers";
+  const keepDorsalLather = frame.stageId === "interlaceFingers"
+    || frame.stageId === "rubBacksOfFingers" || frame.stageId === "rubThumbs"
+    || frame.stageId === "rubFingertips";
   // Palmar rubbing never paints the backs, including their outer edges.
   const leftDorsalCoverage = keepDorsalLather ? 1 : isBacksStage
     ? THREE.MathUtils.smoothstep(frame.stageProgress, 0.14, 0.29)
