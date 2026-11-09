@@ -584,7 +584,9 @@ export class HandwashingSequenceController {
     // Different hand/bone filters made the fast stroke lag behind its fingers.
     // Use a matched response during rubbing, retaining the gentler reach filter.
     const contactMotion = activeStage.id === "rubPalms"
-      || activeStage.id === "rubBacksOfHands" || activeStage.id === "interlaceFingers";
+      || activeStage.id === "rubBacksOfHands" || activeStage.id === "interlaceFingers"
+      || activeStage.id === "rubBacksOfFingers" || activeStage.id === "rubThumbs"
+      || activeStage.id === "rubFingertips";
     this.handAnimator.applyPose(
       evaluation,
       completedThisFrame || (this.stagePoseDirty && (!this.state.isPlaying || this.debug.enabled)) ? 0 : safeDelta,

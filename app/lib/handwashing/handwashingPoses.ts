@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { HandwashingStageId } from "./handwashingConfig";
 import type { FingerName } from "./handRigMapping";
 import { INTERLACE_CONTACT_FRAMES, INTERLACE_ENTRY_POSE } from "./interlaceCalibration";
+import { HAND_CONTACT_CLIPS, THUMB_CONTACT_AXES as FITTED_THUMB_AXES, type ContactTechnique, type ContactSide, type ContactHandFrame } from "./handwashingContactCalibration";
 
 export type { FingerName } from "./handRigMapping";
 
@@ -907,6 +908,259 @@ function evaluateInterlacePose(progress: number): StagePoseEvaluation {
   return interlaceContact();
 }
 
+const contactRotationA = new THREE.Quaternion();
+const contactRotationB = new THREE.Quaternion();
+const contactRotationEuler = new THREE.Euler();
+
+function blendContactFingers(a: Record<FingerName, FingerArticulationTarget>,
+  b: Record<FingerName, FingerArticulationTarget>, t: number, side: ContactSide,
+  jointWeights?: readonly number[]): Record<FingerName, FingerArticulationTarget> {
+  const out = lerpFingerTargets(a, b, t), rad = Math.PI / 180;
+  const curlSign = side === "right" ? 1 : -1, spreadSign = -1;
+  for (const name of ["thumb", ...MOVING_FINGERS] as FingerName[]) {
+    const curls: number[] = [], spreads: number[] = [], twists: number[] = [];
+    for (let k = 0; k < (name === "thumb" ? 3 : 4); k++) {
+      contactRotationA.setFromEuler(contactRotationEuler.set(jointValue(a[name], name, k, "curl") * rad * curlSign,
+        jointValue(a[name], name, k, "twist") * rad, jointValue(a[name], name, k, "spread") * rad * spreadSign, "XYZ"));
+      contactRotationB.setFromEuler(contactRotationEuler.set(jointValue(b[name], name, k, "curl") * rad * curlSign,
+        jointValue(b[name], name, k, "twist") * rad, jointValue(b[name], name, k, "spread") * rad * spreadSign, "XYZ"));
+      contactRotationA.slerp(contactRotationB, name === "thumb" ? t : jointWeights?.[k] ?? t);
+      contactRotationEuler.setFromQuaternion(contactRotationA, "XYZ");
+      curls.push(contactRotationEuler.x / rad / curlSign);
+      spreads.push(contactRotationEuler.z / rad / spreadSign);
+      twists.push(contactRotationEuler.y / rad);
+    }
+    out[name].jointCurls = curls; out[name].jointSpreads = spreads; out[name].jointTwists = twists;
+  }
+  return out;
+}
+
+function blendContactPair(a: StagePoseEvaluation, b: StagePoseEvaluation, t: number): StagePoseEvaluation {
+  const pose = blendPair(a, b, t);
+  for (const side of HAND_SIDES) pose[side].fingers = blendContactFingers(a[side].fingers, b[side].fingers, t, side);
+  return pose;
+}
+
+/** Small fitted clips use the same anatomical channels as the earlier stages. */
+function fittedContact(kind: ContactTechnique, active: ContactSide, phase = 0, weight = 0): StagePoseEvaluation {
+  const clip = HAND_CONTACT_CLIPS[kind][active];
+  const frames = clip.frames;
+  const cursor = clip.cyclic
+    ? ((phase / (Math.PI * 2) % 1 + 1) % 1) * frames.length
+    : (Math.sin(phase) * weight + 1) * (frames.length - 1) / 2;
+  const index = Math.floor(cursor), t = cursor - index, t2 = t * t, t3 = t2 * t;
+  const frame = (i: number) => frames[clip.cyclic
+    ? (i % frames.length + frames.length) % frames.length
+    : THREE.MathUtils.clamp(i, 0, frames.length - 1)]!;
+  const a = frame(index - 1), b = frame(index), c = frame(index + 1), d = frame(index + 2);
+  const sample = (av: number, bv: number, cv: number, dv: number) =>
+    av * (-.5 * t3 + t2 - .5 * t) + bv * (1.5 * t3 - 2.5 * t2 + 1)
+    + cv * (-1.5 * t3 + 2 * t2 + .5 * t) + dv * (.5 * t3 - .5 * t2);
+  const hand = (side: ContactSide): HandPoseTarget => {
+    const channel = (get: (f: ContactHandFrame) => number) => sample(get(a[side]), get(b[side]), get(c[side]), get(d[side]));
+    const root = (i: number) => channel(f => f.root[i]!);
+    const finger = (i: number): FingerArticulationTarget => {
+      const count = i === 0 ? 3 : 4;
+      const curls: number[] = [], spreads: number[] = [], twists: number[] = [];
+      // The preserved GLB has mirrored flexion axes and negative-Z abduction.
+      // Interpolate in the actual bone-delta frame. Baked hinge corrections can
+      // cross Euler +/-180: cubic angle interpolation would unfold an otherwise
+      // valid hook or drive it through the opposing palm between contact frames.
+      const curlSign = side === "right" ? 1 : -1, spreadSign = -1, rad = Math.PI / 180;
+      for (let joint = 0; joint < count; joint++) {
+        const from = b[side].fingers[i]!, to = c[side].fingers[i]!;
+        contactRotationA.setFromEuler(contactRotationEuler.set(from[joint]! * rad * curlSign,
+          from[8 + joint]! * rad, from[4 + joint]! * rad * spreadSign, "XYZ"));
+        contactRotationB.setFromEuler(contactRotationEuler.set(to[joint]! * rad * curlSign,
+          to[8 + joint]! * rad, to[4 + joint]! * rad * spreadSign, "XYZ"));
+        contactRotationA.slerp(contactRotationB, t);
+        contactRotationEuler.setFromQuaternion(contactRotationA, "XYZ");
+        curls.push(contactRotationEuler.x / rad / curlSign);
+        spreads.push(contactRotationEuler.z / rad / spreadSign);
+        twists.push(contactRotationEuler.y / rad);
+      }
+      return { curl: 0, spread: 0, jointCurls: curls, jointSpreads: spreads, jointTwists: twists };
+    };
+    const fingers = { thumb: finger(0), index: finger(1), middle: finger(2), ring: finger(3), pinky: finger(4) };
+    const rad = Math.PI / 180, from = b[side].root, to = c[side].root;
+    contactRotationA.setFromEuler(contactRotationEuler.set(from[3]! * rad, from[4]! * rad, from[5]! * rad, "ZXY"));
+    contactRotationB.setFromEuler(contactRotationEuler.set(to[3]! * rad, to[4]! * rad, to[5]! * rad, "ZXY"));
+    contactRotationA.slerp(contactRotationB, t);
+    contactRotationEuler.setFromQuaternion(contactRotationA, "ZXY");
+    return {
+      palmOffset: [root(0), root(1), root(2)],
+      palmEulerDeg: [contactRotationEuler.x / rad, contactRotationEuler.y / rad, contactRotationEuler.z / rad],
+      wristEulerDeg: [0, 0, 0],
+      fingers,
+    };
+  };
+  const pose: StagePoseEvaluation = { right: hand("right"), left: hand("left"), contactCenterHintOffset: [0, .02, -.12] };
+  // The circular clip starts at its stationary contact pose. Fade its radius
+  // and compensating joint channels together when establishing/releasing contact.
+  if (clip.cyclic && weight < 1) {
+    const rest = fittedContact(kind, active, 0, 1);
+    return blendContactPair(rest, pose, weight);
+  }
+  return pose;
+}
+
+const THUMB_CONTACT_AXES = {
+  right: { pivot: new THREE.Vector3(...FITTED_THUMB_AXES.right.pivot), axis: new THREE.Vector3(...FITTED_THUMB_AXES.right.axis).normalize() },
+  left: { pivot: new THREE.Vector3(...FITTED_THUMB_AXES.left.pivot), axis: new THREE.Vector3(...FITTED_THUMB_AXES.left.axis).normalize() },
+};
+function visibleContactMotion(kind: ContactTechnique, active: ContactSide, phase: number, weight: number): StagePoseEvaluation {
+  // Keep the fitted stroke and its finger compensation together. A fuller
+  // range makes the rubbing readable while the receiving hand stays steady.
+  const motionWeight = weight * (kind === "knuckles" ? 1 : kind === "thumbs" ? .4 : .9);
+  return fittedContact(kind, active, phase, motionWeight);
+}
+
+function releasedContact(contact: StagePoseEvaluation, kind: ContactTechnique, active: ContactSide): StagePoseEvaluation {
+  const pose = blendContactPair(contact, contact, 0);
+  for (const side of HAND_SIDES) {
+    const h = pose[side], direction = side === "right" ? -1 : 1;
+    // Open room around the clasp before turning either long forearm. Thumb
+    // withdrawal follows the radial opening of the grip; palm contact lifts off.
+    h.palmOffset[0] += direction * (side === active ? .30 : .25);
+    h.palmOffset[1] += side === active ? kind === "thumbs" ? .34 : .22 : -.035;
+    h.palmOffset[2] += side === active ? .08 : -.04;
+    h.fingers = buildFingerSet(25, 2, 0, 0, 15, 8);
+  }
+  if (kind === "knuckles") {
+    for (const side of HAND_SIDES) {
+      pose[side].palmOffset = [contact[side].palmOffset[0] + (side === "right" ? -.18 : .18),
+        contact[side].palmOffset[1] + (side === active ? .25 : -.18),
+        contact[side].palmOffset[2] + (side === active ? .04 : -.04)];
+    }
+  } else if (kind === "thumbs") {
+    const end = CONTACT_WITHDRAWAL[kind][active][3];
+    for (const side of HAND_SIDES) for (let axis = 0; axis < 3; axis++)
+      pose[side].palmOffset[axis] = contact[side].palmOffset[axis]! + end[axis]! * (side === active ? 1 : -.8);
+  }
+  return pose;
+}
+
+function articulateBetween(from: StagePoseEvaluation, to: StagePoseEvaluation, rootT: number,
+  active: ContactSide, activeFingerT: number, otherFingerT: number): StagePoseEvaluation {
+  const pose = blendContactPair(from, to, rootT);
+  for (const side of HAND_SIDES) pose[side].fingers = blendContactFingers(
+    from[side].fingers, to[side].fingers, side === active ? activeFingerT : otherFingerT, side,
+  );
+  return pose;
+}
+
+// Withdrawal waypoints in world space, fitted with the fingers still hooked.
+// Opening the PIP joints in place would sweep the distal phalanges through the
+// opposite hand. The thumb grip similarly slides off before it opens.
+function thumbWithdrawal(side: ContactSide): readonly (readonly [number, number, number])[] {
+  const axis = THUMB_CONTACT_AXES[side].axis;
+  return [0, .024, .12, .34].map(distance => [axis.x * distance, axis.y * distance, axis.z * distance] as const);
+}
+
+const CONTACT_WITHDRAWAL = {
+  thumbs: {
+    right: thumbWithdrawal("right"),
+    left: thumbWithdrawal("left"),
+  },
+} as const;
+
+function departContact(contact: StagePoseEvaluation, released: StagePoseEvaluation,
+  kind: ContactTechnique, active: ContactSide, t: number): StagePoseEvaluation {
+  if (kind === "knuckles") {
+    // Unhook at the MCP first: the curved phalanges move forward out of the
+    // clasp as the palms separate. Opening the distal joints in place drags
+    // the fingertips through the opposite palm.
+    const pose = blendContactPair(contact, released, smooth01(t / .75));
+    const weights = [smooth01((t - .5) / .5), smooth01(t / .65),
+      smooth01((t - .55) / .45), smooth01((t - .65) / .35)];
+    for (const side of HAND_SIDES) pose[side].fingers = blendContactFingers(
+      contact[side].fingers, released[side].fingers, smooth01((t - .5) / .5), side, weights,
+    );
+    return pose;
+  }
+  // Baked XYZ channels compensate imported hinge roll; a raw local-X angle
+  // cannot reliably decide whether an anatomically posed finger is hooked.
+  if (kind === "thumbs") {
+    const slide = smooth01(t / .6), opening = smooth01((t - .6) / .2);
+    const fingers = smooth01((t - .8) / .2);
+    const pose = articulateBetween(contact, released, opening, active, fingers, fingers);
+    // Loosen the seated middle/ring pads slightly before sliding off the thumb.
+    // In reverse, this leaves room for the thumb tip to enter the clasp, then
+    // closes the pad onto it. Keep the normal release timing for the other digits.
+    const unclasp = .03 * smooth01(t / .15);
+    const unclaspFingers = blendContactFingers(contact[active].fingers,
+      released[active].fingers, THREE.MathUtils.lerp(unclasp, 1, fingers), active);
+    pose[active].fingers.middle = unclaspFingers.middle;
+    pose[active].fingers.ring = unclaspFingers.ring;
+    const points = CONTACT_WITHDRAWAL[kind][active], lengths = [0];
+    for (let i = 1; i < points.length; i++) lengths.push(lengths[i - 1]! + Math.hypot(
+      ...points[i]!.map((v, axis) => v - points[i - 1]![axis]!),
+    ));
+    const distance = slide * lengths[3]!;
+    const segment = distance < lengths[1]! ? 0 : distance < lengths[2]! ? 1 : 2;
+    const local = (distance - lengths[segment]!) / (lengths[segment + 1]! - lengths[segment]!);
+    for (let axis = 0; axis < 3; axis++) pose[active].palmOffset[axis] +=
+      THREE.MathUtils.lerp(points[segment]![axis]!, points[segment + 1]![axis]!, local) * (1 - opening);
+    return pose;
+  }
+  return articulateBetween(contact, released, smooth01(t / .75), active,
+    smooth01((t - .25) / .75), smooth01((t - .45) / .55));
+}
+
+/** Withdraw, open in free space, turn, then establish the next contact. */
+function contactTransfer(from: StagePoseEvaluation, fromKind: ContactTechnique, fromActive: ContactSide,
+  to: StagePoseEvaluation, toKind: ContactTechnique, toActive: ContactSide, progress: number): StagePoseEvaluation {
+  const exit = releasedContact(from, fromKind, fromActive), entry = releasedContact(to, toKind, toActive);
+  if (progress < .28) {
+    return departContact(from, exit, fromKind, fromActive, progress / .28);
+  }
+  if (progress < .72) {
+    const t = smooth01((progress - .28) / .44), pose = blendContactPair(exit, entry, t);
+    if (fromKind === toKind) {
+      // Keep the released forearms clear while exchanging roles. This depth
+      // clearance is zero at both ends and never affects the cleaning contact.
+      const clearance = (toKind === "knuckles" ? -.15 : .15) * smooth01(t < .5 ? 2 * t : 2 * (1 - t));
+      pose.right.palmOffset[2] += clearance;
+      pose.left.palmOffset[2] -= clearance;
+    }
+    return pose;
+  }
+  const t = (progress - .72) / .28;
+  if (toKind !== "tips") return departContact(to, entry, toKind, toActive, 1 - t);
+  return articulateBetween(entry, to,
+    smooth01((t - .25) / .75), toActive, smooth01(t / .65), smooth01(t / .6));
+}
+
+function evaluateLateContact(kind: ContactTechnique, progress: number): StagePoseEvaluation {
+  const first = fittedContact(kind, "right"), second = fittedContact(kind, "left");
+  const entryEnd = kind === "knuckles" ? .16 : .12;
+  const swapStart = kind === "knuckles" ? .46 : .43, swapEnd = kind === "knuckles" ? .62 : .59;
+  if (kind === "knuckles" && progress < .04) {
+    // Follow only the seated interlace's withdrawal, keeping its raised right
+    // hand clear. Stop before the earlier insertion's wide arc and dorsal turn.
+    return evaluateInterlacePose(.28 - .13 * smooth01(progress / .04));
+  }
+  if (progress < entryEnd) {
+    const previous = kind === "knuckles" ? evaluateInterlacePose(.15)
+      : fittedContact(kind === "thumbs" ? "knuckles" : "thumbs", "left");
+    return contactTransfer(previous, kind === "knuckles" ? "tips" : kind === "tips" ? "thumbs" : "knuckles", kind === "knuckles" ? "right" : "left",
+      first, kind, "right", kind === "knuckles" ? (progress - .04) / (entryEnd - .04) : progress / entryEnd);
+  }
+  if (progress >= swapStart && progress < swapEnd) return contactTransfer(
+    first, kind, "right", second, kind, "left", (progress - swapStart) / (swapEnd - swapStart),
+  );
+  const active = progress < swapStart ? "right" : "left";
+  const t = progress < swapStart ? (progress - entryEnd) / (swapStart - entryEnd) : (progress - swapEnd) / (1 - swapEnd);
+  // Establish the fitted rub a little sooner, then settle gently before release.
+  const weight = smooth01(t / .10) * smooth01((1 - t) / .14);
+  const turns = kind === "tips" ? active === "right" ? 5 : 6 : active === "right" ? 4 : 5;
+  const phase = t * Math.PI * 2 * turns;
+  // Slightly soften each back-and-forth reversal without changing the fitted
+  // contact path or cycle count. Fingertip circles keep an even angular speed.
+  const contactPhase = kind === "tips" ? phase : phase + .03 * Math.sin(2 * phase);
+  return visibleContactMotion(kind, active, contactPhase, weight);
+}
+
 /**
  * Evaluates the procedural hand and finger pose targets for any stage at a given
  * normalized stage progress (0..1) and elapsed stage time (seconds).
@@ -1328,132 +1582,16 @@ function evaluateBaseStagePose(
     }
 
     case "rubBacksOfFingers": {
-      // 10. WHO Step 4: Clean backs of fingers — controlled, relaxed finger flexion without splaying
-      const scrubY = rubFast * 0.016;
-      const scrubZ = rubFastCos * 0.014;
-      const flexPulse = rubFast * 2.5;
-      return {
-        right: {
-          palmOffset: [0.056, 0.022 + scrubY, -0.015 + scrubZ],
-          palmEulerDeg: [14, -2, 14],
-          wristEulerDeg: [4, 0, rubFast * 4],
-          fingers: {
-            thumb: { curl: 10, spread: 2, twist: 0, distalBias: 1.05 },
-            index: { curl: 15 + flexPulse, spread: 0.4, twist: 0, distalBias: 1.1 },
-            middle: { curl: 16 + flexPulse, spread: 0, twist: 0, distalBias: 1.1 },
-            ring: { curl: 15 + flexPulse, spread: -0.3, twist: 0, distalBias: 1.1 },
-            pinky: { curl: 14 + flexPulse, spread: -0.6, twist: 0, distalBias: 1.1 },
-          },
-        },
-        left: {
-          palmOffset: [-0.056, -0.022 - scrubY, 0.015 - scrubZ],
-          palmEulerDeg: [12, 2, -2],
-          wristEulerDeg: [4, 0, -rubFast * 4],
-          fingers: {
-            thumb: { curl: 10, spread: 2, twist: 0, distalBias: 1.05 },
-            index: { curl: 15 - flexPulse, spread: 0.4, twist: 0, distalBias: 1.1 },
-            middle: { curl: 16 - flexPulse, spread: 0, twist: 0, distalBias: 1.1 },
-            ring: { curl: 15 - flexPulse, spread: -0.3, twist: 0, distalBias: 1.1 },
-            pinky: { curl: 14 - flexPulse, spread: -0.6, twist: 0, distalBias: 1.1 },
-          },
-        },
-        contactCenterHintOffset: [0.0, 0, -0.02],
-      };
+      return evaluateLateContact("knuckles", progress);
     }
 
     case "rubThumbs": {
-      // 11. WHO Step 5: Clean thumbs — clasping hand wraps smoothly around opposite thumb without distorting base
-      const { swap, swapArc } = smoothRoleBlend(progress);
-      const twistWave = rubMed * 8;
-      const pumpWave = rubFast * 0.012;
-
-      const rGripCurl = THREE.MathUtils.lerp(15 + rubFast * 3, 4, swap);
-      const lGripCurl = THREE.MathUtils.lerp(4, 15 + rubFast * 3, swap);
-      const rThumbSpread = THREE.MathUtils.lerp(4, 7, swap);
-      const lThumbSpread = THREE.MathUtils.lerp(7, 4, swap);
-      const rThumbCurl = THREE.MathUtils.lerp(10 + rubMed * 3, -2, swap);
-      const lThumbCurl = THREE.MathUtils.lerp(-2, 10 + rubMed * 3, swap);
-
-      return {
-        right: {
-          palmOffset: [
-            0.032 + swapArc * 0.04,
-            THREE.MathUtils.lerp(0.055 + pumpWave, -0.035, swap),
-            THREE.MathUtils.lerp(-0.01, 0.01, swap),
-          ],
-          palmEulerDeg: [
-            THREE.MathUtils.lerp(10 + twistWave * 0.3, 12, swap),
-            THREE.MathUtils.lerp(2, -4, swap),
-            THREE.MathUtils.lerp(22 + twistWave, -4, swap),
-          ],
-          wristEulerDeg: [twistWave * 0.35, 0, 0],
-          fingers: buildFingerSet(rGripCurl, 0.5, elapsed * 5.2, 1.5, rThumbCurl, rThumbSpread, 1.08),
-        },
-        left: {
-          palmOffset: [
-            -0.032 - swapArc * 0.04,
-            THREE.MathUtils.lerp(-0.035, 0.055 + pumpWave, swap),
-            THREE.MathUtils.lerp(0.01, -0.01, swap),
-          ],
-          palmEulerDeg: [
-            THREE.MathUtils.lerp(12, 10 + twistWave * 0.3, swap),
-            THREE.MathUtils.lerp(0, -2, swap),
-            THREE.MathUtils.lerp(12, -16 - twistWave, swap),
-          ],
-          wristEulerDeg: [-twistWave * 0.35, 0, 0],
-          fingers: buildFingerSet(lGripCurl, 0.5, elapsed * 5.2, 1.5, lThumbCurl, lThumbSpread, 1.08),
-        },
-        contactCenterHintOffset: [0.0, 0.02, 0.0],
-      };
+      return evaluateLateContact("thumbs", progress);
     }
 
     case "rubFingertips": {
-      // 12. WHO Step 6: Clean fingertips — gently curled fingertips scrub in opposite open palm without joint collapse
-      const { swap, swapArc } = smoothRoleBlend(progress);
-      const circleY = rubFast * 0.016;
-      const circleZ = rubFastCos * 0.016;
-      const scrubFlex = rubFast * 2.5;
-
-      const rTipCurl = THREE.MathUtils.lerp(15 + scrubFlex, -5, swap);
-      const lTipCurl = THREE.MathUtils.lerp(-5, 15 + scrubFlex, swap);
-      const rBias = THREE.MathUtils.lerp(1.15, 0.95, swap);
-      const lBias = THREE.MathUtils.lerp(0.95, 1.15, swap);
-      const rSpread = THREE.MathUtils.lerp(-1.2, 0.5, swap);
-      const lSpread = THREE.MathUtils.lerp(0.5, -1.2, swap);
-
-      return {
-        right: {
-          palmOffset: [
-            0.054 + swapArc * 0.035,
-            THREE.MathUtils.lerp(0.022 + circleY, -0.018, swap),
-            THREE.MathUtils.lerp(0.025 + circleZ, -0.015, swap),
-          ],
-          palmEulerDeg: [
-            THREE.MathUtils.lerp(8, 14, swap),
-            THREE.MathUtils.lerp(6, -2, swap),
-            THREE.MathUtils.lerp(18, -22, swap),
-          ],
-          wristEulerDeg: [THREE.MathUtils.lerp(6, -4, swap), 0, rubFast * 3.5],
-          fingers: buildFingerSet(rTipCurl, rSpread, elapsed * 6.8, 1.8, 8, 2, rBias),
-        },
-        left: {
-          palmOffset: [
-            -0.054 - swapArc * 0.035,
-            THREE.MathUtils.lerp(-0.018, 0.022 + circleY, swap),
-            THREE.MathUtils.lerp(-0.015, 0.025 + circleZ, swap),
-          ],
-          palmEulerDeg: [
-            THREE.MathUtils.lerp(12, 8, swap),
-            THREE.MathUtils.lerp(-2, -6, swap),
-            THREE.MathUtils.lerp(28, -12, swap),
-          ],
-          wristEulerDeg: [THREE.MathUtils.lerp(-4, 6, swap), 0, -rubFast * 3.5],
-          fingers: buildFingerSet(lTipCurl, lSpread, elapsed * 6.8 + Math.PI, 1.8, 8, 2, lBias),
-        },
-        contactCenterHintOffset: [0.0, 0.0, 0.0],
-      };
+      return evaluateLateContact("tips", progress);
     }
-
     case "rinseHands": {
       // 13a. Rinse hands: return to a relaxed, open position beneath the water stream
       const rinseWave = Math.sin(elapsed * 4.8);

@@ -45,6 +45,12 @@ watch(
       activeSectionId.value = 'langkah2'
     } else if (stageIdx === 5) {
       activeSectionId.value = 'langkah3'
+    } else if (stageIdx === 6) {
+      activeSectionId.value = 'langkah4'
+    } else if (stageIdx === 7) {
+      activeSectionId.value = 'langkah5'
+    } else if (stageIdx === 8) {
+      activeSectionId.value = 'langkah6'
     }
   }
 )
@@ -386,15 +392,15 @@ onUnmounted(() => {
     <!-- 3D WebGL Canvas with Light Studio Clear Color -->
     <TresCanvas v-else clear-color="#edf7f7">
       <TresPerspectiveCamera :position="cameraPosition" :fov="45" />
-      <!-- Studio Light Setup for Crisp Light Mode (Similar to Apple 3D Product Renderings) -->
-      <!-- 1. Warm Sun Key Light: creates clean daytime cel highlights -->
-      <TresDirectionalLight :position="[4.5, 6.5, 3.8]" :intensity="2.2" color="#FFFFFF" />
-      <!-- 2. Studio Ambient Light: soft, luminous fill -->
-      <TresAmbientLight :intensity="1.15" color="#F0F9FA" />
-      <!-- 3. Studio Fill Light from opposite side -->
-      <TresDirectionalLight :position="[-3.5, 4.5, 3.0]" :intensity="0.9" color="#E2F6F3" />
-      <!-- 4. Soft Rim / Backlight -->
-      <TresDirectionalLight :position="[-2.0, 5.0, -3.5]" :intensity="0.8" color="#EDF8E9" />
+      <!-- Real-time cinematic lighting: bright, open shadows with warm/cool separation. -->
+      <!-- Keep the warm side key first: the existing cel shaders use its direction. -->
+      <TresDirectionalLight :position="[4.2, 5.0, 2.6]" :intensity="2.6" color="#FFF5E8" />
+      <!-- Soft ambient fill keeps the cleaning gestures clearly visible. -->
+      <TresAmbientLight :intensity="0.8" color="#E8EEFF" />
+      <!-- Cooler opposing fill preserves finger detail without flattening the key. -->
+      <TresDirectionalLight :position="[-3.5, 3.5, 2.0]" :intensity="0.7" color="#DCE6FF" />
+      <!-- A restrained back rim separates the silhouettes from the bright background. -->
+      <TresDirectionalLight :position="[-2.8, 4.6, -3.8]" :intensity="1.1" color="#EEF3FF" />
       <OrbitControls :target="cameraTarget" :min-distance="0.65" :max-distance="6" />
       <primitive v-if="model?.scene" :object="model.scene" />
       <HandwashingWaterSystem :controller="controller" />

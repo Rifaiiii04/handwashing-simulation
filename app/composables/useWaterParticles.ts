@@ -17,6 +17,7 @@ interface Droplet {
   lifetime: number;
   size: number;
   active: boolean;
+  water: boolean;
 }
 
 export interface WaterDropletSystem {
@@ -25,7 +26,7 @@ export interface WaterDropletSystem {
   dispose(): void;
 }
 
-/** A small, collision-free pool of hand-localized splash droplets and soap micro-bubbles. */
+/** A small pool of localized splash droplets and soap micro-bubbles. */
 export function createWaterDropletSystem(
   config: Partial<WaterParticleConfig> = {},
 ): WaterDropletSystem {
@@ -43,6 +44,7 @@ export function createWaterDropletSystem(
     lifetime: resolved.particleLifetime,
     size: 0,
     active: false,
+    water: false,
   }));
   const freeSlots = Array.from({ length: capacity }, (_, index) => capacity - index - 1);
   const positions = new Float32Array(capacity * 3);
@@ -100,9 +102,78 @@ export function createWaterDropletSystem(
   const gravity = Math.max(0, resolved.particleGravity);
   const baseLifetime = Math.max(0.12, resolved.particleLifetime);
   const baseSize = Math.max(0.006, resolved.particleSize);
+  const previousWaterOrigin = new THREE.Vector3();
+  const waterOrigin = new THREE.Vector3();
+  let hasPreviousWaterOrigin = false;
+  const basinBounds = new THREE.Box3();
+  const basinMatrix = new THREE.Matrix4();
+  let basinMesh: THREE.Mesh | null = null;
+  let basinGeometry: THREE.BufferGeometry | null = null;
+
+  function updateBasin(frame: WaterFrameState): void {
+    const surface = frame.sinkWaterSurface;
+    if (!surface) {
+      basinMesh = null;
+      basinGeometry = null;
+      basinBounds.makeEmpty();
+      return;
+    }
+    surface.updateWorldMatrix(true, false);
+    if (surface === basinMesh && surface.geometry === basinGeometry && basinMatrix.equals(surface.matrixWorld)) return;
+    if (!surface.geometry.boundingBox) surface.geometry.computeBoundingBox();
+    basinMesh = surface;
+    basinGeometry = surface.geometry;
+    basinMatrix.copy(surface.matrixWorld);
+    if (surface.geometry.boundingBox) basinBounds.copy(surface.geometry.boundingBox).applyMatrix4(surface.matrixWorld);
+    else basinBounds.makeEmpty();
+  }
+
+  function advanceWater(delta: number, frame: WaterFrameState): boolean {
+    let dirty = false;
+    for (let index = 0; index < capacity; index++) {
+      const particle = particles[index]!;
+      if (!particle.active || !particle.water) continue;
+      particle.age += delta;
+      const nextX = particle.x + particle.vx * delta;
+      const nextY = particle.y + particle.vy * delta - gravity * delta * delta * 0.5;
+      const nextZ = particle.z + particle.vz * delta;
+      const nextVy = particle.vy - gravity * delta;
+      let absorbed = false;
+      // Merge descending water into the basin's mean water plane. The cached
+      // bounds avoid raycasting every particle or affecting the foam particles.
+      const waterY = frame.streamEnd.y;
+      if (!basinBounds.isEmpty() && nextVy < 0 && nextY <= waterY
+        && waterY >= basinBounds.min.y - 0.02 && waterY <= basinBounds.max.y + 0.02) {
+        const height = Math.max(0, particle.y - waterY);
+        const root = Math.sqrt(particle.vy * particle.vy + 2 * gravity * height);
+        const hitTime = height > 0 ? Math.min(delta, 2 * height / Math.max(1e-8, root - particle.vy)) : 0;
+        const hitX = particle.x + particle.vx * hitTime, hitZ = particle.z + particle.vz * hitTime;
+        absorbed = hitX >= basinBounds.min.x && hitX <= basinBounds.max.x
+          && hitZ >= basinBounds.min.z && hitZ <= basinBounds.max.z;
+      }
+      if (particle.age >= particle.lifetime - 1e-10 || absorbed) {
+        particle.active = false;
+        particle.y = -1000;
+        positions[index * 3 + 1] = -1000;
+        sizes[index] = 0;
+        opacities[index] = 0;
+        freeSlots.push(index);
+      } else {
+        particle.x = nextX; particle.y = nextY; particle.z = nextZ; particle.vy = nextVy;
+        positions[index * 3] = particle.x;
+        positions[index * 3 + 1] = particle.y;
+        positions[index * 3 + 2] = particle.z;
+        sizes[index] = particle.size;
+        opacities[index] = 0.78 * (1 - particle.age / particle.lifetime);
+      }
+      dirty = true;
+    }
+    return dirty;
+  }
 
   function clearAllParticles(): void {
     emissionAccumulator = 0;
+    hasPreviousWaterOrigin = false;
     freeSlots.length = 0;
     for (let index = 0; index < capacity; index++) {
       const particle = particles[index]!;
@@ -126,6 +197,7 @@ export function createWaterDropletSystem(
     if (slot === undefined) return;
     const particle = particles[slot];
     if (!particle) return;
+    particle.water = !isFoamMode;
 
     const angle = Math.random() * Math.PI * 2;
     if (isFoamMode) {
@@ -143,13 +215,15 @@ export function createWaterDropletSystem(
       particle.size = baseSize * (0.62 + Math.random() * 0.48);
       particle.active = true;
     } else {
-      // Dynamic, expansive water splash droplets when washing hands under the stream
-      const horizontalSpeed = 0.22 + Math.random() * 0.45;
-      particle.x = origin.x + (Math.random() - 0.5) * 0.18;
-      particle.y = origin.y + (Math.random() - 0.15) * 0.035;
-      particle.z = origin.z - Math.random() * 0.16 + 0.04;
+      // Keep the splash close to the actual stream impact instead of spraying
+      // wide, disconnected droplets across the basin.
+      const horizontalSpeed = 0.14 + Math.random() * 0.22;
+      const sourceSpread = Math.max(0.02, Math.min(0.07, resolved.streamRadius * 1.25));
+      particle.x = origin.x + (Math.random() - 0.5) * sourceSpread;
+      particle.y = origin.y + 0.004 + Math.random() * 0.018;
+      particle.z = origin.z + (Math.random() - 0.5) * sourceSpread;
       particle.vx = Math.cos(angle) * horizontalSpeed;
-      particle.vy = 0.10 + Math.random() * 0.32;
+      particle.vy = 0.10 + Math.random() * 0.22;
       particle.vz = Math.sin(angle) * horizontalSpeed;
       particle.gravityScale = 1.0;
       particle.age = 0;
@@ -175,22 +249,44 @@ export function createWaterDropletSystem(
       frame.particleMode !== "none" &&
       frame.particleIntensity > 0.005;
 
+    updateBasin(frame);
+    let dirty = false;
     if (!canEmit) {
       emissionAccumulator = 0;
-    } else {
+      hasPreviousWaterOrigin = false;
+      dirty = advanceWater(frame.delta, frame) || dirty;
+    } else if (isFoamMode) {
+      hasPreviousWaterOrigin = false;
       const effectiveRate = Math.max(0, resolved.particleRate * frame.particleIntensity);
       emissionAccumulator += frame.delta * effectiveRate;
-      const spawnOrigin = isFoamMode ? frame.foamWorldCenter : frame.splashOrigin;
       while (emissionAccumulator >= 1) {
         emissionAccumulator -= 1;
-        spawn(spawnOrigin, isFoamMode);
+        spawn(frame.foamWorldCenter, true);
       }
+      dirty = advanceWater(frame.delta, frame) || dirty;
+    } else {
+      const rate = Math.max(0, resolved.particleRate * frame.particleIntensity);
+      const count = Math.floor(emissionAccumulator + frame.delta * rate + 1e-10);
+      let advanced = 0;
+      if (!hasPreviousWaterOrigin) previousWaterOrigin.copy(frame.splashOrigin);
+      // Advance to each birth time so new droplets receive only the remaining
+      // frame time. Analytical gravity then follows the same arc at every FPS.
+      for (let birth = 0; birth < count; birth++) {
+        const at = THREE.MathUtils.clamp((birth + 1 - emissionAccumulator) / rate, advanced, frame.delta);
+        dirty = advanceWater(at - advanced, frame) || dirty;
+        waterOrigin.lerpVectors(previousWaterOrigin, frame.splashOrigin, frame.delta > 0 ? at / frame.delta : 1);
+        spawn(waterOrigin, false);
+        advanced = at;
+      }
+      emissionAccumulator = Math.max(0, emissionAccumulator + frame.delta * rate - count);
+      dirty = advanceWater(frame.delta - advanced, frame) || dirty;
+      previousWaterOrigin.copy(frame.splashOrigin);
+      hasPreviousWaterOrigin = true;
     }
 
-    let dirty = false;
     for (let index = 0; index < capacity; index++) {
       const particle = particles[index];
-      if (!particle?.active) continue;
+      if (!particle?.active || particle.water) continue;
       particle.age += frame.delta;
       if (particle.age >= particle.lifetime) {
         particle.active = false;

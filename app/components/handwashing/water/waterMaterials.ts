@@ -9,6 +9,7 @@ interface WaterUniforms {
   impactLocal: { value: THREE.Vector3 };
   impactRadius: { value: number };
   surfaceAmplitude: { value: number };
+  surfaceFlowStrength: { value: number };
   deepColor: { value: THREE.Color };
   midColor: { value: THREE.Color };
   baseColor: { value: THREE.Color };
@@ -56,6 +57,7 @@ export function createWaterMaterial(
     impactLocal: { value: new THREE.Vector3() },
     impactRadius: { value: 0.2 },
     surfaceAmplitude: { value: 0.12 },
+    surfaceFlowStrength: { value: 1 },
     deepColor: { value: deepColorObj },
     midColor: { value: midColorObj },
     baseColor: { value: baseColorObj },
@@ -75,7 +77,9 @@ export function createWaterMaterial(
   });
 
   material.userData.waterMaterial = { uniforms } satisfies WaterMaterialData;
-  material.customProgramCacheKey = () => `bapelkes-toon-water-${style}-v9`;
+  material.customProgramCacheKey = () => style === "surface" || style === "stream"
+    ? `bapelkes-toon-water-${style}-v13-flow`
+    : `bapelkes-toon-water-${style}-v9`;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uWaterTime = uniforms.time;
     shader.uniforms.uDrainLocal = uniforms.drainLocal;
@@ -83,6 +87,7 @@ export function createWaterMaterial(
     shader.uniforms.uImpactLocal = uniforms.impactLocal;
     shader.uniforms.uImpactRadius = uniforms.impactRadius;
     shader.uniforms.uSurfaceAmplitude = uniforms.surfaceAmplitude;
+    if (style === "surface") shader.uniforms.uSurfaceFlowStrength = uniforms.surfaceFlowStrength;
     shader.uniforms.uWaterDeepColor = uniforms.deepColor;
     shader.uniforms.uWaterMidColor = uniforms.midColor;
     shader.uniforms.uWaterBaseColor = uniforms.baseColor;
@@ -94,7 +99,7 @@ export function createWaterMaterial(
       uniform float uDrainRadius;
       uniform vec3 uImpactLocal;
       uniform float uImpactRadius;
-      uniform float uSurfaceAmplitude;
+      uniform float uSurfaceAmplitude;${style === "surface" ? "\n      uniform float uSurfaceFlowStrength;" : ""}
       uniform vec3 uWaterDeepColor;
       uniform vec3 uWaterMidColor;
       uniform vec3 uWaterBaseColor;
@@ -143,14 +148,17 @@ export function createWaterMaterial(
         float fineWave = sin(phaseC) * 0.14;
         float impactDistance = length(position.xz - uImpactLocal.xz);
         float impactMask = exp(-impactDistance * impactDistance / max(0.01, uImpactRadius * uImpactRadius * 1.5));
-        float impactRipple = sin(impactDistance * 36.0 - uWaterTime * 5.0) * impactMask * 0.17;
+        float impactRipple = sin(impactDistance * 36.0 - uWaterTime * 5.0) * impactMask * 0.17 * uSurfaceFlowStrength;
         float drainDistance = length(position.xz - uDrainLocal.xz);
-        float drainAngle = atan(position.z - uDrainLocal.z, position.x - uDrainLocal.x);
+        // A periodic bend avoids the height seam from multiplying atan by a
+        // fractional turn, and fades smoothly at the center of the drain.
+        float drainBend = (position.z - uDrainLocal.z) / max(drainDistance, 0.0001)
+          * smoothstep(0.0, max(0.001, uDrainRadius * 0.6), drainDistance) * 0.55;
         float drainMask = exp(-drainDistance * drainDistance / max(0.015, uDrainRadius * uDrainRadius * 7.0));
-        float drainRipple = sin(drainDistance * 32.0 + uWaterTime * 3.6 + drainAngle * 0.55) * drainMask * 0.12;
+        float drainRipple = sin(drainDistance * 32.0 + uWaterTime * 3.6 + drainBend) * drainMask * 0.12 * uSurfaceFlowStrength;
         float drainDepression = 1.0 - smoothstep(uDrainRadius * 0.6, uDrainRadius * 3.2, drainDistance);
         transformed.y += (broadWave + crossingWave + fineWave + impactRipple + drainRipple
-          - drainDepression * 0.12) * uSurfaceAmplitude;
+          - drainDepression * 0.12 * uSurfaceFlowStrength) * uSurfaceAmplitude;
       ` : style === "stream" ? `
         float streamV = clamp(0.5 - position.y, 0.0, 1.0);
         // Clean, smooth gravitational taper (narrowing from spout down to contact)
@@ -217,6 +225,21 @@ export function createWaterMaterial(
       `;
       shader.fragmentShader = shader.fragmentShader.replace(targetChunk, replacementChunk);
     } else if (style === "surface") {
+      // Filter the existing bands over a pixel footprint. Their thresholds,
+      // spacing, motion, colors and contrast stay exactly as authored.
+      shader.fragmentShader = `
+        float waterBandIntegral(float x, float halfWidth) {
+          return floor(x) * (2.0 * halfWidth)
+            + clamp(fract(x) - (0.5 - halfWidth), 0.0, 2.0 * halfWidth);
+        }
+        float waterBandCoverage(float center, float threshold, float phaseWidth) {
+          const float invTau = 0.15915494309189535;
+          float halfWidth = acos(threshold) * invTau;
+          float footprint = max(phaseWidth * invTau, 0.0001);
+          return clamp((waterBandIntegral(center + footprint * 0.5, halfWidth)
+            - waterBandIntegral(center - footprint * 0.5, halfWidth)) / footprint, 0.0, 1.0);
+        }
+      ` + shader.fragmentShader;
       const targetChunk = "vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;";
       const replacementChunk = `
         #if NUM_DIR_LIGHTS > 0
@@ -235,33 +258,42 @@ export function createWaterMaterial(
           // 2. Clean concentric ripple rings at faucet impact
           vec2 impactOffset = vWaterLocalPosition.xz - uImpactLocal.xz;
           float impactDist = length(impactOffset);
-          float impactMask = exp(-impactDist * impactDist / max(0.003, uImpactRadius * uImpactRadius * 2.6));
+          float impactMask = exp(-impactDist * impactDist / max(0.003, uImpactRadius * uImpactRadius * 2.6)) * uSurfaceFlowStrength;
 
           float ripplePhase = impactDist * 34.0 - uWaterTime * 4.6;
-          float rippleWave = sin(ripplePhase);
-          float fRipple = fwidth(rippleWave) * 0.5 + 0.001;
-          float rippleCrest = smoothstep(0.84 - fRipple, 0.84 + fRipple, rippleWave) * impactMask;
-          float rippleShadow = smoothstep(0.84 - fRipple, 0.84 + fRipple, -rippleWave) * impactMask;
+          float fRipple = fwidth(impactDist) * 34.0;
+          // Fold the original sine before filtering so an accumulated runtime
+          // clock cannot lose precision when reduced to a fractional period.
+          float rippleOffset = acos(clamp(sin(ripplePhase), -1.0, 1.0)) * 0.15915494309189535;
+          float rippleCrest = waterBandCoverage(0.5 + rippleOffset, 0.84, fRipple) * impactMask;
+          float rippleShadow = waterBandCoverage(1.0 - rippleOffset, 0.84, fRipple) * impactMask;
 
           // 3. Clean drain vortex streamlines
           vec2 drainOffset = vWaterLocalPosition.xz - uDrainLocal.xz;
           float drainDist = length(drainOffset);
-          float vortexAngle = atan(drainOffset.y, drainOffset.x);
-          float vortexMask = exp(-drainDist * drainDist / max(0.008, uDrainRadius * uDrainRadius * 9.0));
+          float drainDistanceSq = dot(drainOffset, drainOffset);
+          float vortexAngle = drainDistanceSq > 0.0000000001 ? atan(drainOffset.y, drainOffset.x) : 0.0;
+          float vortexMask = exp(-drainDist * drainDist / max(0.008, uDrainRadius * uDrainRadius * 9.0)) * uSurfaceFlowStrength;
           float drainCenterMask = smoothstep(uDrainRadius * 0.9, uDrainRadius * 1.6, drainDist);
 
           float spiralPhase = drainDist * 26.0 + vortexAngle * 2.0 + uWaterTime * 3.4;
-          float spiralWave = sin(spiralPhase);
-          float fSpiral = fwidth(spiralWave) * 0.5 + 0.001;
-          float spiralCrest = smoothstep(0.85 - fSpiral, 0.85 + fSpiral, spiralWave) * vortexMask * drainCenterMask;
-          float spiralShadow = smoothstep(0.85 - fSpiral, 0.85 + fSpiral, -spiralWave) * vortexMask * drainCenterMask;
+          // Differentiate the angle analytically so filtering never draws a
+          // seam where atan wraps from +pi to -pi.
+          vec2 angleGradient = vec2(-drainOffset.y, drainOffset.x) / max(drainDistanceSq, 0.00000001);
+          float spiralDx = dFdx(drainDist) * 26.0 + dot(angleGradient, dFdx(drainOffset)) * 2.0;
+          float spiralDy = dFdy(drainDist) * 26.0 + dot(angleGradient, dFdy(drainOffset)) * 2.0;
+          float fSpiral = abs(spiralDx) + abs(spiralDy);
+          float spiralOffset = acos(clamp(sin(spiralPhase), -1.0, 1.0)) * 0.15915494309189535;
+          float spiralCrest = waterBandCoverage(0.5 + spiralOffset, 0.85, fSpiral) * vortexMask * drainCenterMask;
+          float spiralShadow = waterBandCoverage(1.0 - spiralOffset, 0.85, fSpiral) * vortexMask * drainCenterMask;
 
           // 4. Controlled anime specular glints
           vec3 H = normalize(L + V);
           float NdotH = max(dot(N, H), 0.0);
-          float spec = pow(NdotH, 32.0);
-          float fSpec = fwidth(spec) * 0.5 + 0.001;
-          float celGlint = smoothstep(0.72 - fSpec, 0.72 + fSpec, spec) * 0.65;
+          // Equivalent to the original pow(NdotH, 32) > 0.72 contour,
+          // filtered before exponentiation to keep tiny highlights stable.
+          float fSpec = fwidth(NdotH) * 0.5 + 0.0000429595;
+          float celGlint = smoothstep(0.9897867609 - fSpec, 0.9897867609 + fSpec, NdotH) * 0.65;
 
           float celShadowAcc = clamp(rippleShadow * 0.60 + spiralShadow * 0.50, 0.0, 1.0);
           vec3 waterShaded = mix(animeTone, uWaterDeepColor * 0.75, celShadowAcc);
@@ -320,7 +352,7 @@ export function createWaterMaterial(
           float streamV = clamp(0.5 - vWaterLocalPosition.y, 0.0, 1.0);
           float flowSpeed = uWaterTime * 10.0;
           float streak1 = sin(streamAngle * 4.0 + streamV * 6.0 - flowSpeed);
-          float streak2 = sin(streamAngle * 7.0 - streamV * 4.0 - flowSpeed * 1.4 + 1.2);
+          float streak2 = sin(streamAngle * 7.0 - streamV * 4.0 + flowSpeed * 1.4 + 1.2);
           float combinedStreak = streak1 * 0.6 + streak2 * 0.4;
           float fStreak = fwidth(combinedStreak) * 0.5 + 0.001;
           float streakLine = smoothstep(0.78 - fStreak, 0.78 + fStreak, combinedStreak);
@@ -328,9 +360,9 @@ export function createWaterMaterial(
           // Longitudinal specular rim glint
           vec3 H = normalize(L + V);
           float NdotH = max(dot(N, H), 0.0);
-          float spec = pow(NdotH, 36.0);
-          float fSpec = fwidth(spec) * 0.5 + 0.001;
-          float celGlint = smoothstep(0.70 - fSpec, 0.70 + fSpec, spec);
+          // Preserve the original pow(NdotH, 36) > 0.70 highlight contour.
+          float fSpec = fwidth(NdotH) * 0.5 + 0.0000392913;
+          float celGlint = smoothstep(0.9901412816 - fSpec, 0.9901412816 + fSpec, NdotH);
 
           // Crisp pale aqua anime highlight tone
           vec3 streamHighlightColor = mix(uWaterBaseColor, uWaterHighlightColor, 0.75);
@@ -354,6 +386,7 @@ export function updateWaterMaterial(
   impactLocal?: THREE.Vector3,
   impactRadius?: number,
   surfaceAmplitude?: number,
+  surfaceFlowStrength?: number,
 ): void {
   const data = material.userData.waterMaterial as WaterMaterialData | undefined;
   if (!data) return;
@@ -363,6 +396,9 @@ export function updateWaterMaterial(
   if (impactLocal) data.uniforms.impactLocal.value.copy(impactLocal);
   if (impactRadius !== undefined) data.uniforms.impactRadius.value = impactRadius;
   if (surfaceAmplitude !== undefined) data.uniforms.surfaceAmplitude.value = surfaceAmplitude;
+  if (surfaceFlowStrength !== undefined) {
+    data.uniforms.surfaceFlowStrength.value = THREE.MathUtils.clamp(surfaceFlowStrength, 0, 1);
+  }
 }
 
 export function disposeWaterMaterial(material: THREE.Material): void {

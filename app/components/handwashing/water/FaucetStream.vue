@@ -188,6 +188,8 @@ const upAxis = new THREE.Vector3(0, 1, 0);
 const scratchDir = new THREE.Vector3();
 const scratchCenter = new THREE.Vector3();
 const targetUpperEnd = new THREE.Vector3();
+let flowStrength = 0;
+let lastResetToken = -1;
 
 function orientCylinder(
   cylinderMesh: THREE.Mesh,
@@ -214,7 +216,17 @@ const effect: WaterEffect = {
   order: 0,
   object,
   update(frame: WaterFrameState) {
-    object.visible = frame.ready && frame.active && frame.streamActive;
+    if (frame.resetToken !== lastResetToken) {
+      lastResetToken = frame.resetToken;
+      flowStrength = 0;
+    }
+    if (frame.ready && frame.active) {
+      flowStrength = THREE.MathUtils.damp(
+        flowStrength, frame.streamActive ? 1 : 0, frame.streamActive ? 18 : 12, frame.delta,
+      );
+    }
+    // A brief radial ramp keeps the existing stream cohesive during tap changes.
+    object.visible = frame.ready && frame.active && flowStrength > 0.005;
     if (!object.visible) return;
 
     // Smoothly blend upper stream endpoint between sink surface and hand impact point
@@ -223,7 +235,7 @@ const effect: WaterEffect = {
       frame.handImpactPoint,
       frame.handContactFactor,
     );
-    orientCylinder(upperMesh, frame.origin, targetUpperEnd, 1.0);
+    orientCylinder(upperMesh, frame.origin, targetUpperEnd, flowStrength);
 
     if (frame.handContactFactor > 0.03) {
       // 1. Expansive, dynamic water sheet spreading across palms and between fingers (sela-sela jari)
@@ -237,7 +249,7 @@ const effect: WaterEffect = {
         1.0 +
         0.06 * Math.sin(frame.time * 11.0) +
         0.03 * Math.sin(frame.time * 23.0);
-      const spreadScale = frame.handContactFactor * dynamicSurge;
+      const spreadScale = frame.handContactFactor * dynamicSurge * flowStrength;
       handSpreadMesh.scale.set(spreadScale, spreadScale, spreadScale);
 
       // 2. Dynamic impact entry ripple
@@ -245,7 +257,7 @@ const effect: WaterEffect = {
       impactMesh.position.copy(frame.handImpactPoint);
       impactMesh.rotation.set(0.12, 0, 0);
       const pulseScale =
-        frame.handContactFactor * (1.0 + 0.18 * Math.sin(frame.time * 18.0));
+        frame.handContactFactor * flowStrength * (1.0 + 0.06 * Math.sin(frame.time * 9.0));
       impactMesh.scale.set(pulseScale, 1.0, pulseScale);
 
       // 3. Runoff stream cascading cleanly from underneath the cupped hands
@@ -254,7 +266,7 @@ const effect: WaterEffect = {
         runoffMesh,
         frame.handRunoffOrigin,
         frame.streamEnd,
-        frame.handContactFactor * 0.88,
+        frame.handContactFactor * 0.88 * flowStrength,
       );
     } else {
       handSpreadMesh.visible = false;
