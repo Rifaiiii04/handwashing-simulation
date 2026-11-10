@@ -71,7 +71,10 @@ watch(
 function selectSection(section: HandwashingStepSection) {
   if (!section.enabled) return
   activeSectionId.value = section.id
-  targetEndStageIndex.value = section.endStageIndex
+  // Sections with an authored handoff continue through the destination stage
+  // so the release, free-space transfer, and seated contact are visible before
+  // the section pauses.
+  targetEndStageIndex.value = section.playThroughStageIndex ?? section.endStageIndex
   controller.goToStage(section.startStageIndex, true)
 }
 
@@ -354,6 +357,9 @@ watch(
         const mesh = child as THREE.Mesh
         mesh.geometry = refineSinkToMediumPoly(mesh.geometry)
         mesh.material = createAnimeSinkMaterial()
+      }
+      if (child.name === 'SinkWaterSurface') {
+        child.visible = false
       }
     })
     controller.bindScene(loaded.scene)

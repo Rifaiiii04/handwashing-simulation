@@ -1115,14 +1115,19 @@ function contactTransfer(from: StagePoseEvaluation, fromKind: ContactTechnique, 
     return departContact(from, exit, fromKind, fromActive, progress / .28);
   }
   if (progress < .72) {
-    const t = smooth01((progress - .28) / .44), pose = blendContactPair(exit, entry, t);
-    if (fromKind === toKind) {
-      // Keep the released forearms clear while exchanging roles. This depth
-      // clearance is zero at both ends and never affects the cleaning contact.
-      const clearance = (toKind === "knuckles" ? -.15 : .15) * smooth01(t < .5 ? 2 * t : 2 * (1 - t));
-      pose.right.palmOffset[2] += clearance;
-      pose.left.palmOffset[2] -= clearance;
-    }
+    // Technique changes need a readable free-space turn as well as the
+    // release. Give the hands a shallow opposing depth arc so the thumb grip
+    // visibly clears before the fingertip cluster seats on the opposite palm.
+    const t = fromKind === toKind
+      ? smooth01((progress - .28) / .44)
+      : freeHandTravel((progress - .28) / .44);
+    const pose = blendContactPair(exit, entry, t);
+    const clearance = fromKind === toKind
+      ? (toKind === "knuckles" ? -.15 : .15)
+      : toKind === "tips" ? .18 : .14;
+    const arc = clearance * Math.sin(Math.PI * t);
+    pose.right.palmOffset[2] += arc;
+    pose.left.palmOffset[2] -= arc;
     return pose;
   }
   const t = (progress - .72) / .28;
@@ -1131,29 +1136,110 @@ function contactTransfer(from: StagePoseEvaluation, fromKind: ContactTechnique, 
     smooth01((t - .25) / .75), toActive, smooth01(t / .65), smooth01(t / .6));
 }
 
+/** Uncurl the interlaced tips along their exit lanes before turning the palms. */
+function releaseInterlacedFingers(progress: number): StagePoseEvaluation {
+  const t = smooth01(THREE.MathUtils.clamp(progress, 0, 1));
+  const seated = interlaceContact();
+  const pose = blendContactPair(seated, seated, 0);
+  // A rigid upward pull catches the hooked tips in the opposing palm. Couple
+  // the lift to distal extension; metacarpals keep their lanes until clear.
+  const knuckles = smooth01((t - .65) / .35);
+  const open = buildFingerSet(12, 6, 0, 0, 8, 12);
+  for (const side of HAND_SIDES) {
+    pose[side].fingers = blendContactFingers(seated[side].fingers, open, t, side,
+      [knuckles, knuckles, t, t]);
+    pose[side].palmOffset[1] += (side === "right" ? 1 : -1) * .16 * t;
+  }
+  return pose;
+}
+
+function releaseKnuckleContact(contact: StagePoseEvaluation, released: StagePoseEvaluation,
+  progress: number): StagePoseEvaluation {
+  const t = THREE.MathUtils.clamp(progress, 0, 1);
+  const pose = blendContactPair(contact, released, smooth01(t / .85));
+  // Extend at the MCP as the hooks move out of their seated lanes. Keep the
+  // distal shape until they clear; opening those joints early catches the rings.
+  // The longer release/seat phases give the tips room to uncurl gently.
+  const opening = smooth01((t - .4) / .6);
+  const joints = [opening, smooth01(t / .65),
+    smooth01((t - .3) / .7), smooth01((t - .35) / .65)];
+  for (const side of HAND_SIDES) pose[side].fingers = blendContactFingers(
+    contact[side].fingers, released[side].fingers, opening, side, joints,
+  );
+  return pose;
+}
+
+function freeHandTravel(progress: number): number {
+  const t = THREE.MathUtils.clamp(progress, 0, 1), ramp = .14;
+  // Integrate a smooth velocity ramp, cruise, then decelerate. The free turn
+  // retains zero velocity/acceleration at its ends without a fast midpoint.
+  if (t > 1 - ramp) return 1 - freeHandTravel(1 - t);
+  if (t >= ramp) return (t - ramp * .5) / (1 - ramp);
+  const u = t / ramp;
+  return ramp * u * u * u * (1 - u * .5) / (1 - ramp);
+}
+
+function exchangeKnuckleContact(first: StagePoseEvaluation, second: StagePoseEvaluation,
+  progress: number): StagePoseEvaluation {
+  const exit = releasedContact(first, "knuckles", "right");
+  const entry = releasedContact(second, "knuckles", "left");
+  if (progress < .36) return releaseKnuckleContact(first, exit, progress / .36);
+  if (progress < .64) {
+    const t = freeHandTravel((progress - .36) / .28);
+    const pose = blendContactPair(exit, entry, t);
+    const clearance = -.15 * Math.sin(Math.PI * t);
+    pose.right.palmOffset[2] += clearance;
+    pose.left.palmOffset[2] -= clearance;
+    return pose;
+  }
+  return releaseKnuckleContact(second, entry, (1 - progress) / .36);
+}
+
+function enterKnuckleContact(contact: StagePoseEvaluation, progress: number): StagePoseEvaluation {
+  if (progress < .055) return releaseInterlacedFingers(progress / .055);
+  const released = releaseInterlacedFingers(1);
+  const approach = releasedContact(contact, "knuckles", "right");
+  if (progress < .16) {
+    const t = freeHandTravel((progress - .055) / .105);
+    const pose = blendContactPair(released, approach, t);
+    // Turning the free forearms at different depths keeps their silhouettes
+    // from sweeping through one another during the change of grip.
+    const arc = Math.sin(Math.PI * t) * .06;
+    pose.right.palmOffset[2] += arc;
+    pose.left.palmOffset[2] -= arc;
+    return pose;
+  }
+  return releaseKnuckleContact(contact, approach, 1 - (progress - .16) / .10);
+}
+
+/**
+ * Step 4 enters from the exact interlaced endpoint of step 3. The short
+ * withdrawal clears the hooked tips, then the calibrated contact frames seat
+ * the curled fingertips on the opposite palm while the fingers remain locked.
+ */
 function evaluateLateContact(kind: ContactTechnique, progress: number): StagePoseEvaluation {
   const first = fittedContact(kind, "right"), second = fittedContact(kind, "left");
-  const entryEnd = kind === "knuckles" ? .16 : .12;
-  const swapStart = kind === "knuckles" ? .46 : .43, swapEnd = kind === "knuckles" ? .62 : .59;
-  if (kind === "knuckles" && progress < .04) {
-    // Follow only the seated interlace's withdrawal, keeping its raised right
-    // hand clear. Stop before the earlier insertion's wide arc and dorsal turn.
-    return evaluateInterlacePose(.28 - .13 * smooth01(progress / .04));
-  }
+  // Keep the fingertip contact seated early in its stage; the visible release
+  // and free turn are authored inside this short entry window.
+  const entryEnd = kind === "knuckles" ? .26 : .12;
+  const swapStart = kind === "knuckles" ? .48 : .43, swapEnd = kind === "knuckles" ? .76 : .59;
+  if (kind === "knuckles" && progress < entryEnd) return enterKnuckleContact(first, progress);
   if (progress < entryEnd) {
-    const previous = kind === "knuckles" ? evaluateInterlacePose(.15)
-      : fittedContact(kind === "thumbs" ? "knuckles" : "thumbs", "left");
-    return contactTransfer(previous, kind === "knuckles" ? "tips" : kind === "tips" ? "thumbs" : "knuckles", kind === "knuckles" ? "right" : "left",
-      first, kind, "right", kind === "knuckles" ? (progress - .04) / (entryEnd - .04) : progress / entryEnd);
+    const previous = fittedContact(kind === "thumbs" ? "knuckles" : "thumbs", "left");
+    return contactTransfer(previous, kind === "tips" ? "thumbs" : "knuckles", "left",
+      first, kind, "right", progress / entryEnd);
   }
-  if (progress >= swapStart && progress < swapEnd) return contactTransfer(
-    first, kind, "right", second, kind, "left", (progress - swapStart) / (swapEnd - swapStart),
-  );
+  if (progress >= swapStart && progress < swapEnd) {
+    const t = (progress - swapStart) / (swapEnd - swapStart);
+    return kind === "knuckles" ? exchangeKnuckleContact(first, second, t)
+      : contactTransfer(first, kind, "right", second, kind, "left", t);
+  }
   const active = progress < swapStart ? "right" : "left";
   const t = progress < swapStart ? (progress - entryEnd) / (swapStart - entryEnd) : (progress - swapEnd) / (1 - swapEnd);
   // Establish the fitted rub a little sooner, then settle gently before release.
   const weight = smooth01(t / .10) * smooth01((1 - t) / .14);
-  const turns = kind === "tips" ? active === "right" ? 5 : 6 : active === "right" ? 4 : 5;
+  const turns = kind === "tips" ? active === "right" ? 5 : 6
+    : kind === "knuckles" ? active === "right" ? 3 : 4 : active === "right" ? 4 : 5;
   const phase = t * Math.PI * 2 * turns;
   // Slightly soften each back-and-forth reversal without changing the fitted
   // contact path or cycle count. Fingertip circles keep an even angular speed.

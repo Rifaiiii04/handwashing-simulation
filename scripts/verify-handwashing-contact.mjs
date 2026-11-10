@@ -451,7 +451,8 @@ for (const [id, kind] of [['rubBacksOfFingers', 'backs'], ['rubThumbs', 'grip'],
     const receiving = active === 'right' ? 'left' : 'right';
     const samples = kind === 'grip'
       ? Array.from({ length: 17 }, (_, i) => active === 'right' ? .16 + .27 * i / 16 : .61 + .39 * i / 16)
-      : active === 'right' ? kind === 'backs' ? [.29, .34, .39, .44] : [.19, .26, .33, .40] : [.68, .78, .88, .98];
+      : active === 'right' ? kind === 'backs' ? [.29, .34, .39, .44] : [.19, .26, .33, .40]
+        : kind === 'backs' ? [.78, .85, .90, .98] : [.68, .78, .88, .98];
     for (const progress of samples) {
       try {
       const pose = evaluateStagePose(id, progress, 0, { pumpStroke: 0, pumpPressProgress: 0 });

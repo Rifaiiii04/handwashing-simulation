@@ -5,6 +5,8 @@ export interface HandwashingStepSection {
   readonly subLabel: string
   readonly startStageIndex: number
   readonly endStageIndex: number
+  /** Optional stage index to play through before this section pauses. */
+  readonly playThroughStageIndex?: number
   readonly startStageId: string
   readonly enabled: boolean
   readonly whoStepNumber?: number
@@ -113,6 +115,9 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     subLabel: 'Gosok Sela-Sela Jari Bagian Dalam',
     startStageIndex: 5,
     endStageIndex: 5,
+    // The interlaced release is authored as the entry of stage 4. Let it play
+    // through stage 4 so the handoff is visible instead of pausing at stage 3.
+    playThroughStageIndex: 6,
     startStageId: 'interlaceFingers',
     enabled: true,
     whoStepNumber: 3,
@@ -142,25 +147,28 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     subLabel: 'Posisi Jari Saling Mengunci',
     startStageIndex: 6,
     endStageIndex: 6,
+    // Continue into the thumb technique so the calibrated release/transfer
+    // pose is visible instead of stopping on the last rubbing frame.
+    playThroughStageIndex: 7,
     startStageId: 'rubBacksOfFingers',
     enabled: true,
     whoStepNumber: 4,
     estimatedDuration: '10 detik',
     guidanceTitle: 'Langkah 4: Jari-Jari Saling Mengunci (WHO)',
     guidanceDescription:
-      'Kaitkan jari-jemari kedua tangan dengan posisi saling mengunci, lalu gosokkan bagian belakang ruas-ruas jari ke telapak tangan yang berlawanan.',
+      'Kaitkan jari-jemari kedua tangan dengan posisi saling mengunci, lalu gosokkan ujung jari dan ruasnya ke telapak tangan yang berlawanan.',
     movementPoints: [
-      'Rapatkan jari tangan kiri dan kanan membentuk kaitan mengunci.',
-      'Gosokkan buku-buku jari secara bergantian ke telapak tangan.',
+      'Rapatkan jari tangan kiri dan kanan hingga delapan jari saling mengunci.',
+      'Tekuk ujung jari ke telapak tangan lawan, lalu gosokkan bergantian dengan gerakan pendek.',
     ],
     benefitsTitle: 'Manfaat Medis & Kebersihan (Kemenkes)',
     benefitsSummary:
-      'Membersihkan punggung ruas jari dan lipatan sendi falang yang sulit dibersihkan dengan telapak datar.',
+      'Membersihkan ujung jari, sela kaitan, dan lipatan sendi falang yang sulit terjangkau dengan telapak datar.',
     benefitsPoints: [
-      'Menjangkau lekukan dorsal pada buku-buku jari tangan.',
-      'Mengangkat kotoran yang terperangkap pada lipatan sendi jari.',
+      'Menjangkau ujung jari dan lekukan ruas ketika jari-jari saling mengunci.',
+      'Mengangkat kotoran yang terperangkap pada lipatan sendi dan sela kaitan jari.',
     ],
-    focalAreaName: 'Buku & Ruas Jari Tangan',
+    focalAreaName: 'Ujung Jari & Ruas Jari Tangan',
   },
   {
     id: 'langkah5',
@@ -169,6 +177,9 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     subLabel: 'Gosok & Putar Kedua Ibu Jari',
     startStageIndex: 7,
     endStageIndex: 7,
+    // Step 5 hands off directly to the fingertip technique after its final
+    // thumb grip, including the authored free-space transfer.
+    playThroughStageIndex: 8,
     startStageId: 'rubThumbs',
     enabled: true,
     whoStepNumber: 5,

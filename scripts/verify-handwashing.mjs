@@ -1003,6 +1003,15 @@ console.log('PASS: debug world/local overrides, exact seek, snapshots, inspectio
 // Check the actual rig at phase boundaries, including the last calibrated pose
 // of step three; no mesh/IK solver is involved in playback.
 const lateStages = ['rubBacksOfFingers', 'rubThumbs', 'rubFingertips'];
+const interlaceSection = HANDWASHING_SECTIONS.find(s => s.whoStepNumber === 3);
+assert.equal(interlaceSection.playThroughStageIndex, 6,
+  'step three playback includes the authored step-four handoff stage');
+const knuckleSection = HANDWASHING_SECTIONS.find(s => s.whoStepNumber === 4);
+assert.equal(knuckleSection.playThroughStageIndex, 7,
+  'step four playback includes the authored thumb handoff stage');
+const thumbSection = HANDWASHING_SECTIONS.find(s => s.whoStepNumber === 5);
+assert.equal(thumbSection.playThroughStageIndex, 8,
+  'step five playback includes the authored fingertip handoff stage');
 for (const [i, id] of lateStages.entries()) {
   const stage = HANDWASHING_STAGES.find(s => s.id === id);
   assert.equal(stage.whoStep, i + 4);
@@ -1024,9 +1033,13 @@ for (const [i, id] of lateStages.entries()) {
 for (const [before, after] of [['interlaceFingers', lateStages[0]], [lateStages[0], lateStages[1]], [lateStages[1], lateStages[2]]]) {
   apply(before, 1); const end = snapshot();
   apply(after, 0);
-  assert(maxDistance(end, snapshot()) < 1e-6, `${before} -> ${after}: pose handoff within floating-point precision`);
+  const start = snapshot();
+  assert(maxDistance(end, start) < 1e-6, `${before} -> ${after}: pose handoff within floating-point precision`);
+  apply(after, .15);
+  assert(maxDistance(start, snapshot()) > .02, `${before} -> ${after}: authored transition visibly moves before the destination rub`);
 }
 
 // Baked XYZ channels require anatomical and skin-based checks, rather than
 // raw curl thresholds or nearest-vertex contact. Keep these on the real GLB.
 await import('./verify-handwashing-contact.mjs');
+await (await import('./verify-handwashing-knuckles.mjs')).verifyKnuckles();

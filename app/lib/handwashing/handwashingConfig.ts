@@ -191,9 +191,9 @@ export const HANDWASHING_STAGES: readonly HandwashingStageConfig[] = [
   },
   {
     id: "rubBacksOfFingers",
-    label: "Langkah 4 · Gosok Punggung Ruas Jari",
-    shortLabel: "4. Buku Jari",
-    description: "Kaitkan dan tekuk jari, lalu gosok punggung ruas jari pada telapak yang berlawanan dengan gerakan pendek. Berganti sisi setelah melepaskan kaitan.",
+    label: "Langkah 4 · Bersihkan Ujung Jari dengan Saling Mengunci",
+    shortLabel: "4. Ujung Jari",
+    description: "Kaitkan jari kedua tangan, tekuk ujungnya ke telapak yang berlawanan, lalu gosok bergantian dengan gerakan pendek.",
     whoStep: 4,
     duration: 12,
     blendDuration: .5,
