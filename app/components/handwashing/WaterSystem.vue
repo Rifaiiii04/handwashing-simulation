@@ -7,6 +7,7 @@ import SoapDispenser from "./SoapDispenser.vue";
 import FaucetStream from "./water/FaucetStream.vue";
 import HandWetness from "./water/HandWetness.vue";
 import SinkWaterSurface from "./water/SinkWaterSurface.vue";
+import SinkDrainFlow from "./water/SinkDrainFlow.vue";
 import WaterDroplets from "./water/WaterDroplets.vue";
 import { DEFAULT_WATER_CONFIG, type WaterSystemConfig } from "./water/waterConfig";
 import {
@@ -43,6 +44,10 @@ const emitterQuaternion = new THREE.Quaternion();
 const localEmitterPoint = new THREE.Vector3();
 const foamBounds = new THREE.Box3();
 const defaultFoamWorldCenter = new THREE.Vector3();
+// Verified porcelain anchors used while the generated SinkWaterSurface is
+// hidden. Keep these in world space so the runoff effect does not inherit the
+// old visual water-plane height from the GLB surface mesh.
+const basinLandingWorld = new THREE.Vector3(0, 0.823, -0.668);
 
 const frame: WaterFrameState = {
   stageId: sequenceController.state.stageId,
@@ -344,8 +349,16 @@ onBeforeRender(({ delta }) => {
     frame.streamDirection.set(0, -1, 0).applyQuaternion(emitterQuaternion).normalize();
     if (frame.streamDirection.y > -0.35) frame.streamDirection.set(0, -1, 0);
 
-    frame.streamEnd.copy(streamEndpointLocal);
-    sinkWaterSurface.localToWorld(frame.streamEnd);
+    // SinkWaterSurface is intentionally hidden at runtime. In that state the
+    // faucet must land on the porcelain basin floor, not on the old water
+    // plane (which sits roughly 0.28 units too high). Keep the explicit world
+    // anchor as the source for the basin runoff/funnel effect.
+    if (sinkWaterSurface.visible) {
+      frame.streamEnd.copy(streamEndpointLocal);
+      sinkWaterSurface.localToWorld(frame.streamEnd);
+    } else {
+      frame.streamEnd.copy(basinLandingWorld);
+    }
 
     const rightWeight = palmStreamWeight(frame.rightPalmWorld, frame.rightPalmNormal);
     const leftWeight = palmStreamWeight(frame.leftPalmWorld, frame.leftPalmNormal);
@@ -419,6 +432,7 @@ onUnmounted(() => {
   <FaucetStream />
   <HandWetness />
   <SinkWaterSurface />
+  <SinkDrainFlow />
   <SoapDispenser />
   <WaterDroplets />
 </template>

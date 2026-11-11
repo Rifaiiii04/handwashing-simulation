@@ -2,7 +2,10 @@ export interface HandwashingStepSection {
   readonly id: 'persiapan' | 'langkah1' | 'langkah2' | 'langkah3' | 'langkah4' | 'langkah5' | 'langkah6'
   readonly label: string
   readonly shortLabel: string
+  /** Short step title shown to the user. */
   readonly subLabel: string
+  /** One-sentence instruction shown under the title. */
+  readonly summary: string
   readonly startStageIndex: number
   readonly endStageIndex: number
   /** Optional stage index to play through before this section pauses. */
@@ -11,13 +14,10 @@ export interface HandwashingStepSection {
   readonly enabled: boolean
   readonly whoStepNumber?: number
   readonly estimatedDuration: string
-  readonly guidanceTitle: string
-  readonly guidanceDescription: string
+  /** Short how-to points shown in the Tips panel. */
   readonly movementPoints: readonly string[]
-  readonly benefitsTitle: string
-  readonly benefitsSummary: string
-  readonly benefitsPoints: readonly string[]
-  readonly focalAreaName: string
+  /** One-sentence reason why the step matters. */
+  readonly benefit: string
 }
 
 export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
@@ -25,94 +25,65 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     id: 'persiapan',
     label: 'Persiapan',
     shortLabel: 'Persiapan',
-    subLabel: 'Basahi Tangan dengan Air Mengalir',
+    subLabel: 'Basahi kedua tangan',
+    summary: 'Bilas tangan di bawah air mengalir sampai basah merata.',
     startStageIndex: 0,
     endStageIndex: 1,
     startStageId: 'moveHandsToFaucet',
     enabled: true,
     whoStepNumber: 1,
-    estimatedDuration: '5 – 7 detik',
-    guidanceTitle: 'Persiapan: Basahi Kedua Tangan',
-    guidanceDescription:
-      'Posisikan kedua tangan di bawah kucuran air mengalir dari keran. Ratakan air ke seluruh permukaan kulit tangan hingga basah merata sebelum mengaplikasikan sabun.',
+    estimatedDuration: '5–7 detik',
     movementPoints: [
-      'Arahkan kedua tangan mendekat ke bawah kucuran keran wastafel.',
-      'Buka telapak tangan ke atas untuk menampung aliran air bersih.',
-      'Basahi seluruh bagian tangan hingga ke pergelangan sebelum sabun dituangkan.',
+      'Dekatkan kedua tangan ke bawah keran.',
+      'Buka telapak tangan agar air mengalir merata.',
+      'Basahi sampai pergelangan tangan.',
     ],
-    benefitsTitle: 'Manfaat Medis & Kebersihan (Kemenkes)',
-    benefitsSummary:
-      'Air mengalir melarutkan debu dan mempersiapkan kulit agar surfaktan sabun dapat beremulsi secara maksimal.',
-    benefitsPoints: [
-      'Membilas partikel debu dan kotoran kasar awal tanpa risiko kontaminasi ulang.',
-      'Memberikan kelembapan optimal pada pori-pori kulit sehingga sabun berbusa melimpah dan tidak menyebabkan iritasi pekat.',
-      'Sistem air mengalir memastikan kuman langsung terhanyut ke saluran pembuangan wastafel, berbeda dari air tampungan kobokan.',
-    ],
-    focalAreaName: 'Kucuran Air Keran & Telapak',
+    benefit: 'Tangan yang basah membuat sabun lebih berbusa dan kotoran lebih mudah terbilas.',
   },
   {
     id: 'langkah1',
     label: 'Langkah Pertama',
     shortLabel: 'Langkah 1',
-    subLabel: 'Ambil Sabun & Gosok Telapak Tangan',
+    subLabel: 'Gosok telapak tangan',
+    summary: 'Ambil sabun, lalu gosok kedua telapak tangan sampai berbusa.',
     startStageIndex: 2,
     endStageIndex: 3,
     startStageId: 'dispenseSoap',
     enabled: true,
     whoStepNumber: 1,
-    estimatedDuration: '10 – 15 detik',
-    guidanceTitle: 'Langkah 1: Tuang Sabun & Gosok Telapak',
-    guidanceDescription:
-      'Ambil sabun cair antiseptik secukupnya (3–5 ml), lalu tangkupkan kedua telapak tangan dan gosok memutar dengan lembut hingga menghasilkan busa melimpah.',
+    estimatedDuration: '10–15 detik',
     movementPoints: [
-      'Tekan pompa dispenser dengan telapak kanan, tampung cairan sabun pada telapak kiri.',
-      'Rapatkan kedua telapak tangan secara berhadapan.',
-      'Gosok kedua telapak tangan dengan gerakan memutar (circular motions) secara merata hingga busa menutup seluruh telapak.',
+      'Tekan pompa sabun dan tampung di telapak tangan.',
+      'Tangkupkan kedua telapak tangan.',
+      'Gosok memutar sampai busa merata.',
     ],
-    benefitsTitle: 'Manfaat Medis & Kebersihan (Kemenkes)',
-    benefitsSummary:
-      'Surfaktan sabun melarutkan selubung lipid virus dan melemahkan daya rekat bakteri pada telapak tangan.',
-    benefitsPoints: [
-      'Molekul sabun merusak membran lipid virus (termasuk virus influenza dan coronavirus) sehingga kuman menjadi tidak aktif.',
-      'Telapak tangan adalah zona sentuh utama saat beraktivitas; penggosokan memutar melepaskan koloni mikrob dari lipatan kulit epidermal.',
-      'Membentuk busa busa tebal yang mengangkat kotoran berminyak agar mudah dibilas.',
-    ],
-    focalAreaName: 'Permukaan Telapak Tangan',
+    benefit: 'Telapak tangan paling sering menyentuh benda, jadi paling banyak kumannya.',
   },
   {
     id: 'langkah2',
     label: 'Langkah Kedua',
     shortLabel: 'Langkah 2',
-    subLabel: 'Gosok Punggung Tangan Bergantian',
+    subLabel: 'Gosok punggung tangan',
+    summary: 'Gosok punggung tangan kiri dengan telapak kanan, lalu gantian.',
     startStageIndex: 4,
     endStageIndex: 4,
     startStageId: 'rubBacksOfHands',
     enabled: true,
     whoStepNumber: 2,
-    estimatedDuration: '10 – 12 detik',
-    guidanceTitle: 'Langkah 2: Gosok Punggung Tangan Bergantian',
-    guidanceDescription:
-      'Letakkan telapak tangan kanan di atas punggung tangan kiri dengan jari saling menyela, lalu gosok ke arah atas dan bawah. Lakukan sebaliknya untuk punggung tangan kanan.',
+    estimatedDuration: '10–12 detik',
     movementPoints: [
-      'Letakkan telapak tangan kanan di atas punggung tangan kiri.',
-      'Sisipkan jari-jemari ke sela-sela jari tangan kiri dari arah luar.',
-      'Gosok ke arah atas dan bawah secara merata, kemudian tukar posisi tangan kanan dan kiri.',
+      'Letakkan telapak kanan di atas punggung tangan kiri.',
+      'Selipkan jari ke sela-sela jari, lalu gosok.',
+      'Ganti posisi tangan.',
     ],
-    benefitsTitle: 'Manfaat Medis & Kebersihan (Kemenkes)',
-    benefitsSummary:
-      'Membersihkan punggung tangan dan sela luar yang sering luput saat mencuci tangan terburu-buru.',
-    benefitsPoints: [
-      'Kulit punggung tangan lebih tipis dan sering terpapar droplet serta debu permukaan meja atau gagang pintu.',
-      'Gerakan menyela dari atas membersihkan bakteri yang menempel di pangkal luar celah jari.',
-      'Mencegah perpindahan patogen nosokomial ke area sensitif tubuh lainnya.',
-    ],
-    focalAreaName: 'Punggung Tangan & Sela Luar',
+    benefit: 'Punggung tangan sering terlewat, padahal ikut terkena kuman dari meja dan gagang pintu.',
   },
   {
     id: 'langkah3',
     label: 'Langkah Ketiga',
     shortLabel: 'Langkah 3',
-    subLabel: 'Gosok Sela-Sela Jari Bagian Dalam',
+    subLabel: 'Gosok sela-sela jari',
+    summary: 'Satukan kedua telapak, silangkan jari, lalu gosok maju-mundur.',
     startStageIndex: 5,
     endStageIndex: 5,
     // The interlaced release is authored as the entry of stage 4. Let it play
@@ -121,30 +92,20 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     startStageId: 'interlaceFingers',
     enabled: true,
     whoStepNumber: 3,
-    estimatedDuration: '10 – 12 detik',
-    guidanceTitle: 'Langkah 3: Gosok Sela-Sela Jari Bagian Dalam',
-    guidanceDescription:
-      'Hadapkan kedua telapak tangan, kaitkan jari-jari saling menyilang, lalu gosok maju dan mundur dengan gesekan kuat di celah-celah antar jari.',
+    estimatedDuration: '10–12 detik',
     movementPoints: [
-      'Hadapkan kedua telapak tangan secara paralel.',
-      'Rapatkan jari-jari yang saling menyela dari sisi depan telapak.',
-      'Lakukan gerakan menggosok maju-mundur secara ritmis sepanjang celah jari.',
+      'Hadapkan kedua telapak tangan.',
+      'Silangkan jari-jari kedua tangan.',
+      'Gosok maju-mundur di sela jari.',
     ],
-    benefitsTitle: 'Manfaat Medis & Kebersihan (Kemenkes)',
-    benefitsSummary:
-      'Sela jari merupakan area mikro paling lembap dan menjadi habitat utama koloni bakteri patogen.',
-    benefitsPoints: [
-      'Sela-sela jari adalah zona mikro paling hangat dan lembap, tempat bersarangnya bakteri penyebab diare dan infeksi saluran cerna.',
-      'Friksi antar sisi samping jari efektif mengikis biofilm kuman yang tidak terjangkau usapan biasa.',
-      'Memastikan seluruh celah jari terlindungi secara higienis sebelum langkah penguncian.',
-    ],
-    focalAreaName: 'Sela-Sela Jari Bagian Dalam',
+    benefit: 'Sela jari hangat dan lembap, tempat kuman mudah bersembunyi.',
   },
   {
     id: 'langkah4',
     label: 'Langkah Keempat',
     shortLabel: 'Langkah 4',
-    subLabel: 'Posisi Jari Saling Mengunci',
+    subLabel: 'Kunci jari, lalu gosok',
+    summary: 'Kaitkan jari kedua tangan, lalu gosokkan ruas jari ke telapak tangan.',
     startStageIndex: 6,
     endStageIndex: 6,
     // Continue into the thumb technique so the calibrated release/transfer
@@ -154,27 +115,18 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     enabled: true,
     whoStepNumber: 4,
     estimatedDuration: '10 detik',
-    guidanceTitle: 'Langkah 4: Jari-Jari Saling Mengunci (WHO)',
-    guidanceDescription:
-      'Kaitkan jari-jemari kedua tangan dengan posisi saling mengunci, lalu gosokkan ujung jari dan ruasnya ke telapak tangan yang berlawanan.',
     movementPoints: [
-      'Rapatkan jari tangan kiri dan kanan hingga delapan jari saling mengunci.',
-      'Tekuk ujung jari ke telapak tangan lawan, lalu gosokkan bergantian dengan gerakan pendek.',
+      'Kaitkan jari-jari kedua tangan hingga saling mengunci.',
+      'Gosokkan ruas jari ke telapak tangan lawan.',
     ],
-    benefitsTitle: 'Manfaat Medis & Kebersihan (Kemenkes)',
-    benefitsSummary:
-      'Membersihkan ujung jari, sela kaitan, dan lipatan sendi falang yang sulit terjangkau dengan telapak datar.',
-    benefitsPoints: [
-      'Menjangkau ujung jari dan lekukan ruas ketika jari-jari saling mengunci.',
-      'Mengangkat kotoran yang terperangkap pada lipatan sendi dan sela kaitan jari.',
-    ],
-    focalAreaName: 'Ujung Jari & Ruas Jari Tangan',
+    benefit: 'Membersihkan ruas dan lipatan jari yang sulit dijangkau.',
   },
   {
     id: 'langkah5',
     label: 'Langkah Kelima',
     shortLabel: 'Langkah 5',
-    subLabel: 'Gosok & Putar Kedua Ibu Jari',
+    subLabel: 'Putar ibu jari',
+    summary: 'Genggam ibu jari, lalu putar sambil digosok. Lakukan bergantian.',
     startStageIndex: 7,
     endStageIndex: 7,
     // Step 5 hands off directly to the fingertip technique after its final
@@ -184,50 +136,30 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     enabled: true,
     whoStepNumber: 5,
     estimatedDuration: '10 detik',
-    guidanceTitle: 'Langkah 5: Gosok & Putar Ibu Jari (WHO)',
-    guidanceDescription:
-      'Genggam ibu jari kiri dengan telapak tangan kanan, putar dan gosok secara sirkular. Lakukan bergantian untuk ibu jari tangan kanan.',
     movementPoints: [
-      'Genggam erat ibu jari tangan kiri dengan telapak tangan kanan.',
-      'Putar tangan kanan memutar ibu jari kiri secara sirkular.',
-      'Lakukan gerakan yang sama secara bergantian untuk ibu jari kanan.',
+      'Genggam ibu jari kiri dengan tangan kanan.',
+      'Putar sambil digosok.',
+      'Ulangi untuk ibu jari kanan.',
     ],
-    benefitsTitle: 'Manfaat Medis & Kebersihan (Kemenkes)',
-    benefitsSummary:
-      'Ibu jari adalah jari paling aktif dan memiliki kontak tertinggi dengan objek luar seperti ponsel dan makanan.',
-    benefitsPoints: [
-      'Ibu jari menyumbang lebih dari 40% fungsi genggaman tangan.',
-      'Area thenar dan pangkal jempol sering menjadi vektor utama transmisi kuman saat makan menggunakan tangan.',
-    ],
-    focalAreaName: 'Pangkal & Batang Ibu Jari',
+    benefit: 'Ibu jari sering dipakai memegang ponsel dan makanan, jadi mudah kotor.',
   },
   {
     id: 'langkah6',
     label: 'Langkah Keenam',
     shortLabel: 'Langkah 6',
-    subLabel: 'Bersihkan Ujung Jari & Kuku',
+    subLabel: 'Gosok ujung jari & bilas',
+    summary: 'Gosok ujung jari di telapak tangan, lalu bilas sampai bersih.',
     startStageIndex: 8,
     endStageIndex: 8,
     startStageId: 'rubFingertips',
     enabled: true,
     whoStepNumber: 6,
     estimatedDuration: '10 detik',
-    guidanceTitle: 'Langkah 6: Ujung Jari, Kuku & Bilas (WHO)',
-    guidanceDescription:
-      'Kuncupkan ujung-ujung jari tangan kanan di atas telapak tangan kiri, lalu putar perlahan searah dan berlawanan jarum jam. Lakukan bergantian, kemudian bilas dengan air mengalir hingga bersih.',
     movementPoints: [
-      'Kuncupkan ujung kuku dan jari tangan kanan.',
-      'Gosokkan memutar di atas telapak tangan kiri.',
-      'Lakukan bergantian untuk kuku jari tangan kiri.',
-      'Bilas tangan dengan air mengalir sampai seluruh sisa sabun hilang, lalu keringkan dengan handuk/tisu bersih.',
+      'Kuncupkan ujung jari kanan, lalu putar di telapak kiri.',
+      'Ganti dengan tangan satunya.',
+      'Bilas dengan air mengalir, lalu keringkan dengan handuk atau tisu bersih.',
     ],
-    benefitsTitle: 'Manfaat Medis & Kebersihan (Kemenkes)',
-    benefitsSummary:
-      'Membersihkan area subungual (bawah kuku) yang menjadi tempat bersembunyinya telur cacing dan mikroba patogen.',
-    benefitsPoints: [
-      'Area bawah kuku adalah tempat persembunyian mikrob yang paling sulit dijangkau.',
-      'Pembersihan kuku sangat vital untuk mencegah penularan penyakit diare, cacingan, dan infeksi makanan.',
-    ],
-    focalAreaName: 'Ujung Kuku & Ujung Jari',
+    benefit: 'Kuku dan ujung jari menyimpan kuman yang paling sulit terbilas.',
   },
 ]

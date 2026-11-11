@@ -6,18 +6,15 @@ import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/Buffer
 import { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
 import { HANDWASHING_SECTIONS, type HandwashingStepSection } from '~/lib/handwashing/handwashingStepsData'
 import HandwashingTopbar from '~/components/handwashing/HandwashingTopbar.vue'
-import HandwashingStepCard from '~/components/handwashing/HandwashingStepCard.vue'
-import HandTuningPanel from '~/components/handwashing/HandTuningPanel.vue'
-import HandRigDebug from '~/components/handwashing/HandRigDebug.vue'
+import HandwashingStepDock from '~/components/handwashing/HandwashingStepDock.vue'
+import HandwashingTipsPanel from '~/components/handwashing/HandwashingTipsPanel.vue'
 
 const { state: model, isLoading } = useGLTF('models/washand.glb')
 const controller = new HandwashingSequenceController()
 const seqState = controller.state
-const showTuning = ref(false)
-const hideDebugFaucet = ref(false)
 
 useHead({
-  title: 'Kemenkes RI · Simulasi 3D Cuci Tangan Pakai Sabun (CTPS)',
+  title: 'Kemenkes RI · Cuci Tangan Pakai Sabun',
   link: [
     { rel: 'icon', type: 'image/png', href: '/logo.png' }
   ]
@@ -26,7 +23,7 @@ useHead({
 const sections = HANDWASHING_SECTIONS
 const activeSectionId = ref<'persiapan' | 'langkah1' | 'langkah2' | 'langkah3' | 'langkah4' | 'langkah5' | 'langkah6'>('persiapan')
 const targetEndStageIndex = ref<number | null>(null)
-const isCardVisible = ref(true)
+const isTipsOpen = ref(false)
 
 const currentSection = computed<HandwashingStepSection>(() => {
   const found = sections.find((s) => s.id === activeSectionId.value)
@@ -118,24 +115,8 @@ function handleTogglePlay() {
   }
 }
 
-watch([() => model.value?.scene, () => controller.debug.enabled, hideDebugFaucet], ([scene, enabled, hidden]) => {
-  const faucet = scene?.getObjectByName('faucet')
-  if (faucet) faucet.visible = !(enabled && hidden)
-})
-
 const cameraPosition = ref<[number, number, number]>([1.65, 3.15, 3.35])
 const cameraTarget = ref<[number, number, number]>([0, 1.65, -.6])
-function debugCamera(view: 'front' | 'side' | 'top' | 'overview') {
-  if (view === 'top') hideDebugFaucet.value = true
-  cameraTarget.value = view === 'overview' ? [0, 1.65, -.6] : [0, 1.8, -.6]
-  cameraPosition.value = view === 'front' ? [0, 2.1, .8]
-    : view === 'side' ? [1.35, 1.95, -.55]
-    : view === 'top' ? [0, 3.25, -.59] : [1.65, 3.15, 3.35]
-}
-
-watch(() => controller.debug.enabled, enabled => {
-  if (!enabled) debugCamera('overview')
-})
 
 /**
  * Subdivide low-poly sink mesh into smooth medium-poly (4,160 triangles),
@@ -378,7 +359,7 @@ onUnmounted(() => {
 <template>
   <!-- Light Mode Studio Gradient Background with Kemenkes Logo Color Harmony (Teal #00A99D + Lime #C4D600) -->
   <div
-    class="relative w-screen h-screen overflow-hidden select-none bg-[#edf7f7]"
+    class="relative w-full h-dvh overflow-hidden select-none bg-[#edf7f7]"
     style="background: radial-gradient(ellipse 70% 60% at 15% 15%, rgba(0, 169, 157, 0.20) 0%, transparent 65%),
                 radial-gradient(ellipse 65% 55% at 85% 85%, rgba(196, 214, 0, 0.18) 0%, transparent 65%),
                 radial-gradient(ellipse 60% 50% at 80% 20%, rgba(0, 180, 216, 0.14) 0%, transparent 60%),
@@ -392,7 +373,7 @@ onUnmounted(() => {
     >
       <img src="/logo.png" alt="Logo Kemenkes" class="w-12 h-12 object-contain animate-bounce drop-shadow-sm" />
       <div class="w-8 h-8 rounded-full border-2 border-[#00A99D] border-t-transparent animate-spin" />
-      <span class="text-sm font-semibold tracking-wide text-slate-700">Memuat Model 3D Simulasi Kemenkes...</span>
+      <span class="text-sm font-semibold tracking-wide text-slate-700">Menyiapkan simulasi...</span>
     </div>
 
     <!-- 3D WebGL Canvas with Light Studio Clear Color -->
@@ -410,49 +391,35 @@ onUnmounted(() => {
       <OrbitControls :target="cameraTarget" :min-distance="0.65" :max-distance="6" />
       <primitive v-if="model?.scene" :object="model.scene" />
       <HandwashingWaterSystem :controller="controller" />
-      <HandRigDebug :controller="controller" />
     </TresCanvas>
 
-    <!-- Topbar: Compact Single-Row Apple Light Glassmorphism with Kemenkes Identity & Controls -->
+    <!-- Header: identity, restart and tips toggle -->
     <HandwashingTopbar
+      v-if="!isLoading"
+      :is-tips-open="isTipsOpen"
+      @reset="handleReset"
+      @toggle-tips="isTipsOpen = !isTipsOpen"
+    />
+
+    <!-- Tips for the current step (hidden by default) -->
+    <HandwashingTipsPanel
+      v-if="!isLoading"
+      :section="currentSection"
+      :is-open="isTipsOpen"
+      @close="isTipsOpen = false"
+    />
+
+    <!-- Bottom dock: current step, play and step navigation -->
+    <HandwashingStepDock
       v-if="!isLoading"
       :controller="controller"
       :sections="sections"
+      :current-section="currentSection"
       :active-section-id="activeSectionId"
-      :is-card-visible="isCardVisible"
-      :show-tuning="showTuning"
       @select-section="selectSection"
-      @reset="handleReset"
       @previous="handlePrevious"
       @next="handleNext"
       @toggle-play="handleTogglePlay"
-      @toggle-card="isCardVisible = !isCardVisible"
-      @open-tuning="showTuning = true"
     />
-
-    <!-- Near-Hand Step Guidance & Benefits Modal Card (Apple Light Glassmorphism) -->
-    <HandwashingStepCard
-      v-if="!isLoading"
-      :controller="controller"
-      :current-section="currentSection"
-      :is-visible="isCardVisible"
-      @toggle-visible="isCardVisible = !isCardVisible"
-    />
-
-    <!-- Live Interactive Tuning Tool -->
-    <HandTuningPanel v-if="!isLoading && showTuning" :controller="controller" />
-
-    <!-- Debug Camera Angle Controls (Active only when debug mode is triggered) -->
-    <div
-      v-if="!isLoading && controller.debug.enabled"
-      class="fixed bottom-4 right-4 z-20 flex flex-wrap gap-1 rounded-full bg-white/85 backdrop-blur-md p-1.5 text-xs text-slate-700 border border-slate-200 shadow-lg"
-      aria-label="Sudut inspeksi kamera"
-    >
-      <button class="rounded-full px-2.5 py-1 hover:bg-slate-100" @click="debugCamera('front')">Depan</button>
-      <button class="rounded-full px-2.5 py-1 hover:bg-slate-100" @click="debugCamera('side')">Samping</button>
-      <button class="rounded-full px-2.5 py-1 hover:bg-slate-100" @click="debugCamera('top')">Atas</button>
-      <button class="rounded-full px-2.5 py-1 hover:bg-slate-100" @click="debugCamera('overview')">Utuh</button>
-      <label class="flex items-center gap-1.5 px-2 font-medium"><input v-model="hideDebugFaucet" type="checkbox" class="accent-[#00A99D]"> Sembunyikan keran</label>
-    </div>
   </div>
 </template>
