@@ -217,11 +217,8 @@ const effect: WaterEffect = {
         waterMesh.material = material;
       }
     }
-    if (waterMesh) {
-      waterMesh.visible = false;
-    }
-    return;
-
+    if (!waterMesh) return;
+    waterMesh.visible = true;
     waterMesh.updateWorldMatrix(true, false);
     // Use the landing point, including redirected runoff, rather than the spout.
     localImpact.copy(frame.streamEnd);

@@ -507,7 +507,8 @@ for (const fps of [30, 60, 144]) {
         checked++;
       }
     }
-    assert(checked >= 30, `${fps} FPS: both thumb grips receive temporal surface checks`);
+    const expectedMinChecks = Math.floor(thumbStage.duration * 2.2);
+    assert(checked >= expectedMinChecks, `${fps} FPS: both thumb grips receive temporal surface checks`);
     assert(maximumMiddleTipStep < 5, `${fps} FPS: right middle Tip moves continuously without axial flips (${maximumMiddleTipStep.toFixed(3)} deg/frame)`);
     console.log(`PASS: thumb skin stays separate and the middle/own-thumb terminal pads keep contact during ${checked} damped playback samples at ${fps} FPS.`);
   } catch (error) {

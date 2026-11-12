@@ -22,7 +22,6 @@ useHead({
 
 const sections = HANDWASHING_SECTIONS
 const activeSectionId = ref<'persiapan' | 'langkah1' | 'langkah2' | 'langkah3' | 'langkah4' | 'langkah5' | 'langkah6'>('persiapan')
-const targetEndStageIndex = ref<number | null>(null)
 const isTipsOpen = ref(false)
 
 const currentSection = computed<HandwashingStepSection>(() => {
@@ -52,33 +51,15 @@ watch(
   }
 )
 
-// Section playback end handler: pause smoothly when reaching target end stage
-watch(
-  [() => seqState.stageIndex, () => seqState.stageProgress],
-  ([stageIdx, stageProg]) => {
-    if (targetEndStageIndex.value !== null && seqState.isPlaying) {
-      if (stageIdx === targetEndStageIndex.value && stageProg >= 0.99) {
-        controller.pause()
-        targetEndStageIndex.value = null
-      }
-    }
-  }
-)
-
 function selectSection(section: HandwashingStepSection) {
   if (!section.enabled) return
   activeSectionId.value = section.id
-  // Sections with an authored handoff continue through the destination stage
-  // so the release, free-space transfer, and seated contact are visible before
-  // the section pauses.
-  targetEndStageIndex.value = section.playThroughStageIndex ?? section.endStageIndex
   controller.goToStage(section.startStageIndex, true)
 }
 
 function handleReset() {
-  targetEndStageIndex.value = null
   activeSectionId.value = 'persiapan'
-  controller.reset(false)
+  controller.restart(true)
 }
 
 function handlePrevious() {
@@ -213,48 +194,30 @@ function refineSinkToMediumPoly(source: THREE.BufferGeometry): THREE.BufferGeome
   return result
 }
 
-function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
-  const rampWidth = 256
-  const rampData = new Uint8Array(rampWidth)
-  for (let i = 0; i < rampWidth; i++) {
-    const t = i / (rampWidth - 1)
-    if (t < 0.24) {
-      rampData[i] = 90
-    } else if (t < 0.48) {
-      rampData[i] = 145
-    } else if (t < 0.76) {
-      rampData[i] = 215
-    } else {
-      rampData[i] = 255
-    }
-  }
-  const gradientMap = new THREE.DataTexture(rampData, rampWidth, 1, THREE.RedFormat)
-  gradientMap.minFilter = THREE.NearestFilter
-  gradientMap.magFilter = THREE.NearestFilter
-  gradientMap.generateMipmaps = false
-  gradientMap.needsUpdate = true
-
-  const highlightColor = new THREE.Color('#FFFFFF')
-  const baseColor = new THREE.Color('#F8FAFD')
-  const midtoneColor = new THREE.Color('#DBE4EE')
-  const shadowColor = new THREE.Color('#B0C2D5')
-  const deepShadowColor = new THREE.Color('#8298B2')
+function createNeoBrutalistSinkMaterial(): THREE.MeshToonMaterial {
+  // Soft, teal-tinted porcelain tones: shadows stay readable (no near-black blocks)
+  const baseColor = new THREE.Color('#E9F0EE')
+  const midtoneColor = new THREE.Color('#C3D2D0')
+  const shadowColor = new THREE.Color('#9DB2B1')
+  const deepShadowColor = new THREE.Color('#7F9897')
+  const highlightColor = new THREE.Color('#F7FBFA')
+  const inkColor = new THREE.Color('#2F4547')
 
   const material = new THREE.MeshToonMaterial({
     color: baseColor,
-    gradientMap: gradientMap,
     side: THREE.DoubleSide,
   })
 
-  material.customProgramCacheKey = () => 'anime-porcelain-sink-v4'
+  material.customProgramCacheKey = () => 'neobrutalist-porcelain-sink-v1'
 
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.uHighlightColor = { value: highlightColor }
     shader.uniforms.uBaseColor = { value: baseColor }
     shader.uniforms.uMidtoneColor = { value: midtoneColor }
     shader.uniforms.uShadowColor = { value: shadowColor }
     shader.uniforms.uDeepShadowColor = { value: deepShadowColor }
-    shader.uniforms.uToneThresholds = { value: new THREE.Vector4(-0.28, -0.06, 0.18, 0.52) }
+    shader.uniforms.uHighlightColor = { value: highlightColor }
+    shader.uniforms.uInkColor = { value: inkColor }
+    shader.uniforms.uToneThresholds = { value: new THREE.Vector4(-0.35, -0.02, 0.32, 0.75) }
 
     shader.vertexShader = `
       varying vec3 vSinkLocalPosition;
@@ -264,11 +227,12 @@ function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
     )
 
     shader.fragmentShader = `
-      uniform vec3 uHighlightColor;
       uniform vec3 uBaseColor;
       uniform vec3 uMidtoneColor;
       uniform vec3 uShadowColor;
       uniform vec3 uDeepShadowColor;
+      uniform vec3 uHighlightColor;
+      uniform vec3 uInkColor;
       uniform vec4 uToneThresholds;
       varying vec3 vSinkLocalPosition;
     ` + shader.fragmentShader
@@ -280,45 +244,43 @@ function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
         vec3 L = normalize(directionalLights[0].direction);
         vec3 V = normalize(vViewPosition);
         float NdotL = dot(N, L);
+        float NdotV = max(dot(N, V), 0.0);
 
         float fEdge = fwidth(NdotL) * 0.75 + 0.001;
 
         float deepStep   = smoothstep(uToneThresholds.x - fEdge, uToneThresholds.x + fEdge, NdotL);
         float shadowStep = smoothstep(uToneThresholds.y - fEdge, uToneThresholds.y + fEdge, NdotL);
-        float baseStep   = smoothstep(uToneThresholds.z - fEdge, uToneThresholds.z + fEdge, NdotL);
-        float highStep   = smoothstep(uToneThresholds.w - fEdge, uToneThresholds.w + fEdge, NdotL);
+        float highStep   = smoothstep(uToneThresholds.z - fEdge, uToneThresholds.z + fEdge, NdotL);
 
-        vec3 animeTone = mix(uDeepShadowColor, uShadowColor, deepStep);
-        animeTone = mix(animeTone, uMidtoneColor, shadowStep);
-        animeTone = mix(animeTone, uBaseColor, baseStep);
-        animeTone = mix(animeTone, uHighlightColor, highStep);
+        vec3 neoTone = mix(uDeepShadowColor, uShadowColor, deepStep);
+        neoTone = mix(neoTone, uMidtoneColor, shadowStep);
+        neoTone = mix(neoTone, uBaseColor, highStep);
 
-        float isPedestal = step(vSinkLocalPosition.y, -1.65);
-        float pedestalCollarShadow = smoothstep(-1.95, -1.72, vSinkLocalPosition.y) * isPedestal * 0.35;
-
-        float isUnderLip = smoothstep(-1.20, -1.14, vSinkLocalPosition.y) * (1.0 - smoothstep(-0.98, -0.92, vSinkLocalPosition.y));
-        float lipShadow = isUnderLip * smoothstep(0.4, 0.9, length(vSinkLocalPosition.xz)) * 0.30;
-
+        // Basin & structural contact block shadows
         float isInnerBasin = smoothstep(-1.16, -1.10, vSinkLocalPosition.y) * (1.0 - smoothstep(-0.70, -0.55, vSinkLocalPosition.y));
         float basinShadow = isInnerBasin * (1.0 - smoothstep(0.2, 0.8, length(vSinkLocalPosition.xz))) * 0.22;
 
-        float celDetailShadow = clamp(pedestalCollarShadow + lipShadow + basinShadow, 0.0, 0.50);
-        animeTone = mix(animeTone, uShadowColor, celDetailShadow);
+        float isUnderLip = smoothstep(-1.20, -1.14, vSinkLocalPosition.y) * (1.0 - smoothstep(-0.98, -0.92, vSinkLocalPosition.y));
+        float lipShadow = isUnderLip * smoothstep(0.4, 0.9, length(vSinkLocalPosition.xz)) * 0.25;
 
+        float blockShadow = clamp(basinShadow + lipShadow, 0.0, 0.35);
+        neoTone = mix(neoTone, uDeepShadowColor, blockShadow);
+
+        // Crisp specular highlight cut
         vec3 H = normalize(L + V);
         float NdotH = max(dot(N, H), 0.0);
-        float spec = pow(NdotH, 24.0);
+        float spec = pow(NdotH, 32.0);
         float fSpec = fwidth(spec) * 0.5 + 0.001;
-        float satinGlint = smoothstep(0.55 - fSpec, 0.55 + fSpec, spec);
+        float crispGlint = smoothstep(0.60 - fSpec, 0.60 + fSpec, spec) * 0.55;
 
-        float fresnel = 1.0 - max(dot(N, V), 0.0);
-        float glazeSheen = smoothstep(0.72, 0.95, fresnel) * 0.16;
+        vec3 litSurface = mix(neoTone, uHighlightColor, crispGlint);
 
-        float rimGlint = smoothstep(-0.43, -0.41, vSinkLocalPosition.y) * smoothstep(0.4, 0.8, -vSinkLocalPosition.z) * 0.30;
+        // Thin neo-brutalist ink outline along the silhouette
+        float fOutline = fwidth(NdotV) * 0.85 + 0.001;
+        float outlineEdge = smoothstep(0.11 - fOutline, 0.11 + fOutline, NdotV);
+        vec3 finalColor = mix(uInkColor, litSurface, outlineEdge);
 
-        vec3 ceramicColor = mix(animeTone, uHighlightColor, clamp(satinGlint * 0.72 + glazeSheen + rimGlint, 0.0, 1.0));
-
-        vec3 outgoingLight = ceramicColor + totalEmissiveRadiance;
+        vec3 outgoingLight = finalColor + totalEmissiveRadiance;
       #else
         vec3 outgoingLight = uBaseColor + totalEmissiveRadiance;
       #endif
@@ -329,6 +291,195 @@ function createAnimeSinkMaterial(): THREE.MeshToonMaterial {
   return material
 }
 
+function createNeoBrutalistHandMaterial(): THREE.MeshToonMaterial {
+  const material = new THREE.MeshToonMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+  })
+
+  material.customProgramCacheKey = () => 'neobrutalist-hand-v1'
+
+  material.onBeforeCompile = (shader) => {
+    const targetChunk = 'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;'
+    const replacementChunk = `
+      #if NUM_DIR_LIGHTS > 0
+        vec3 N = normalize(geometryNormal);
+        vec3 L = normalize(directionalLights[0].direction);
+        vec3 V = normalize(vViewPosition);
+        float NdotL = dot(N, L);
+        float NdotV = max(dot(N, V), 0.0);
+
+        float fEdge = fwidth(NdotL) * 0.75 + 0.001;
+        float shadowStep = smoothstep(0.10 - fEdge, 0.10 + fEdge, NdotL);
+        float highStep = smoothstep(0.50 - fEdge, 0.50 + fEdge, NdotL);
+
+        vec3 baseCol = diffuseColor.rgb;
+        // Warm graphic block shadow (neo-brutalist without excessive brown darkness)
+        vec3 shadowCol = baseCol * vec3(0.76, 0.68, 0.66);
+        vec3 midCol = baseCol * 0.92;
+        vec3 litCol = baseCol * 1.02;
+
+        vec3 celColor = mix(shadowCol, midCol, shadowStep);
+        celColor = mix(celColor, litCol, highStep);
+
+        // Neo-brutalist ink outline along the silhouette
+        float fOutline = fwidth(NdotV) * 0.85 + 0.001;
+        float outlineEdge = smoothstep(0.12 - fOutline, 0.12 + fOutline, NdotV);
+        vec3 inkOutlineColor = vec3(0.30, 0.18, 0.14);
+
+        vec3 finalColor = mix(inkOutlineColor, celColor, outlineEdge);
+        vec3 outgoingLight = finalColor + totalEmissiveRadiance;
+      #else
+        vec3 outgoingLight = diffuseColor.rgb + totalEmissiveRadiance;
+      #endif
+    `
+    shader.fragmentShader = shader.fragmentShader.replace(targetChunk, replacementChunk)
+  }
+
+  return material
+}
+
+function createNeoBrutalistFaucetMaterial(): THREE.MeshToonMaterial {
+  const baseColor = new THREE.Color('#8FA3A8')
+  const shadowColor = new THREE.Color('#5C7076')
+  const highlightColor = new THREE.Color('#F4F9F8')
+  const inkColor = new THREE.Color('#2F4547')
+
+  const material = new THREE.MeshToonMaterial({
+    color: baseColor,
+    side: THREE.DoubleSide,
+  })
+
+  material.customProgramCacheKey = () => 'neobrutalist-faucet-v1'
+
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uBaseColor = { value: baseColor }
+    shader.uniforms.uShadowColor = { value: shadowColor }
+    shader.uniforms.uHighlightColor = { value: highlightColor }
+    shader.uniforms.uInkColor = { value: inkColor }
+
+    shader.fragmentShader = `
+      uniform vec3 uBaseColor;
+      uniform vec3 uShadowColor;
+      uniform vec3 uHighlightColor;
+      uniform vec3 uInkColor;
+    ` + shader.fragmentShader
+
+    const targetChunk = 'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;'
+    const replacementChunk = `
+      #if NUM_DIR_LIGHTS > 0
+        vec3 N = normalize(geometryNormal);
+        vec3 L = normalize(directionalLights[0].direction);
+        vec3 V = normalize(vViewPosition);
+        float NdotL = dot(N, L);
+        float NdotV = max(dot(N, V), 0.0);
+
+        float fEdge = fwidth(NdotL) * 0.75 + 0.001;
+        float shadowStep = smoothstep(0.15 - fEdge, 0.15 + fEdge, NdotL);
+
+        vec3 chromeTone = mix(uShadowColor, uBaseColor, shadowStep);
+
+        vec3 H = normalize(L + V);
+        float NdotH = max(dot(N, H), 0.0);
+        float spec = pow(NdotH, 48.0);
+        float fSpec = fwidth(spec) * 0.5 + 0.001;
+        float glint = smoothstep(0.50 - fSpec, 0.50 + fSpec, spec);
+        chromeTone = mix(chromeTone, uHighlightColor, glint * 0.90);
+
+        // Neo-brutalist ink outline
+        float fOutline = fwidth(NdotV) * 0.85 + 0.001;
+        float outlineEdge = smoothstep(0.12 - fOutline, 0.12 + fOutline, NdotV);
+        vec3 finalColor = mix(uInkColor, chromeTone, outlineEdge);
+
+        vec3 outgoingLight = finalColor + totalEmissiveRadiance;
+      #else
+        vec3 outgoingLight = uBaseColor + totalEmissiveRadiance;
+      #endif
+    `
+    shader.fragmentShader = shader.fragmentShader.replace(targetChunk, replacementChunk)
+  }
+
+  return material
+}
+
+function createNeoBrutalistNailMaterial(): THREE.MeshToonMaterial {
+  const nailColor = new THREE.Color('#E8C4BC')
+  const material = new THREE.MeshToonMaterial({
+    color: nailColor,
+    side: THREE.DoubleSide,
+  })
+
+  material.customProgramCacheKey = () => 'neobrutalist-nail-v1'
+
+  material.onBeforeCompile = (shader) => {
+    const targetChunk = 'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;'
+    const replacementChunk = `
+      #if NUM_DIR_LIGHTS > 0
+        vec3 N = normalize(geometryNormal);
+        vec3 L = normalize(directionalLights[0].direction);
+        vec3 V = normalize(vViewPosition);
+        float NdotL = dot(N, L);
+        float NdotV = max(dot(N, V), 0.0);
+
+        float fEdge = fwidth(NdotL) * 0.75 + 0.001;
+        float shadowStep = smoothstep(0.12 - fEdge, 0.12 + fEdge, NdotL);
+
+        vec3 shadowColor = diffuseColor.rgb * vec3(0.65, 0.52, 0.48);
+        vec3 celNail = mix(shadowColor, diffuseColor.rgb, shadowStep);
+
+        // Ink outline
+        float fOutline = fwidth(NdotV) * 0.85 + 0.001;
+        float outlineEdge = smoothstep(0.12 - fOutline, 0.12 + fOutline, NdotV);
+        vec3 inkOutlineColor = vec3(0.30, 0.18, 0.14);
+
+        vec3 finalColor = mix(inkOutlineColor, celNail, outlineEdge);
+        vec3 outgoingLight = finalColor + totalEmissiveRadiance;
+      #else
+        vec3 outgoingLight = diffuseColor.rgb + totalEmissiveRadiance;
+      #endif
+    `
+    shader.fragmentShader = shader.fragmentShader.replace(targetChunk, replacementChunk)
+  }
+
+  return material
+}
+
+function applyHandTwoToneColors(mesh: THREE.SkinnedMesh, isRight: boolean) {
+  const norm = mesh.geometry.attributes.normal
+  if (!norm) return
+  // Palm normal in rest pose:
+  // Right hand points inward-left: (-0.956, 0.293, 0)
+  // Left hand points inward-right: (0.943, 0.333, 0)
+  const palmNormal = isRight
+    ? new THREE.Vector3(-0.956, 0.293, 0).normalize()
+    : new THREE.Vector3(0.943, 0.333, 0).normalize()
+
+  // Neo-Brutalist palette: natural, healthy skin tones with gentle contrast
+  // Dorsal (punggung tangan & pergelangan): warm honey-sand tan tone (not dark brown)
+  const dorsalColor = new THREE.Color('#D9A28A')
+  // Palmar (telapak tangan): warm natural peach-sand tone (distinctly lighter, soft & natural)
+  const palmarColor = new THREE.Color('#ECD2C0')
+
+  const colors = new Float32Array(norm.count * 3)
+  const tempColor = new THREE.Color()
+
+  for (let i = 0; i < norm.count; i++) {
+    const nx = norm.getX(i), ny = norm.getY(i), nz = norm.getZ(i)
+    const dot = nx * palmNormal.x + ny * palmNormal.y + nz * palmNormal.z
+    const t = THREE.MathUtils.smoothstep(dot, -0.30, 0.30)
+    tempColor.copy(dorsalColor).lerp(palmarColor, t)
+
+    colors[i * 3] = tempColor.r
+    colors[i * 3 + 1] = tempColor.g
+    colors[i * 3 + 2] = tempColor.b
+  }
+
+  mesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+  if (mesh.geometry.attributes.color) {
+    mesh.geometry.attributes.color.needsUpdate = true
+  }
+}
+
 watch(
   () => model.value,
   (loaded) => {
@@ -337,10 +488,28 @@ watch(
       if ((child as THREE.Mesh).isMesh && child.name.toLowerCase() === 'sink') {
         const mesh = child as THREE.Mesh
         mesh.geometry = refineSinkToMediumPoly(mesh.geometry)
-        mesh.material = createAnimeSinkMaterial()
+        mesh.material = createNeoBrutalistSinkMaterial()
       }
       if (child.name === 'SinkWaterSurface') {
-        child.visible = false
+        child.visible = true
+      }
+      if (child.name === 'Hand_AR_V2') {
+        const mesh = child as THREE.SkinnedMesh
+        applyHandTwoToneColors(mesh, true)
+        mesh.material = createNeoBrutalistHandMaterial()
+      }
+      if (child.name === 'Hand_AR_V2001') {
+        const mesh = child as THREE.SkinnedMesh
+        applyHandTwoToneColors(mesh, false)
+        mesh.material = createNeoBrutalistHandMaterial()
+      }
+      if (child.name === 'Hand_AR_V2_1' || child.name === 'Hand_AR_V2001_1') {
+        const mesh = child as THREE.SkinnedMesh
+        mesh.material = createNeoBrutalistNailMaterial()
+      }
+      if (child.name === 'faucet') {
+        const mesh = child as THREE.Mesh
+        mesh.material = createNeoBrutalistFaucetMaterial()
       }
     })
     controller.bindScene(loaded.scene)
@@ -357,14 +526,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- Light Mode Studio Gradient Background with Kemenkes Logo Color Harmony (Teal #00A99D + Lime #C4D600) -->
+  <!-- Calibrated Studio Gradient Background with Kemenkes Color Harmony (Teal #00A99D + Lime #C4D600) -->
   <div
-    class="relative w-full h-dvh overflow-hidden select-none bg-[#edf7f7]"
-    style="background: radial-gradient(ellipse 70% 60% at 15% 15%, rgba(0, 169, 157, 0.20) 0%, transparent 65%),
-                radial-gradient(ellipse 65% 55% at 85% 85%, rgba(196, 214, 0, 0.18) 0%, transparent 65%),
-                radial-gradient(ellipse 60% 50% at 80% 20%, rgba(0, 180, 216, 0.14) 0%, transparent 60%),
-                radial-gradient(ellipse 50% 50% at 50% 50%, rgba(255, 255, 255, 0.95) 0%, transparent 100%),
-                linear-gradient(135deg, #eaf6f6 0%, #f6fbfb 45%, #f4fbf1 100%);"
+    class="relative w-full h-dvh overflow-hidden select-none bg-[#cad9d8]"
+    style="background: radial-gradient(ellipse 65% 55% at 15% 15%, rgba(0, 169, 157, 0.22) 0%, transparent 65%),
+                radial-gradient(ellipse 60% 50% at 85% 85%, rgba(196, 214, 0, 0.14) 0%, transparent 65%),
+                radial-gradient(ellipse 55% 45% at 80% 20%, rgba(0, 150, 180, 0.12) 0%, transparent 60%),
+                radial-gradient(ellipse 70% 60% at 50% 45%, rgba(240, 247, 246, 0.40) 0%, transparent 80%),
+                linear-gradient(135deg, #c5d7d5 0%, #d4e3e2 45%, #cadbd6 100%);"
   >
     <!-- Loading Screen in Light Mode -->
     <div
@@ -376,18 +545,18 @@ onUnmounted(() => {
       <span class="text-sm font-semibold tracking-wide text-slate-700">Menyiapkan simulasi...</span>
     </div>
 
-    <!-- 3D WebGL Canvas with Light Studio Clear Color -->
-    <TresCanvas v-else clear-color="#edf7f7">
+    <!-- 3D WebGL Canvas with Balanced Studio Clear Color -->
+    <TresCanvas v-else clear-color="#cbd9d8">
       <TresPerspectiveCamera :position="cameraPosition" :fov="45" />
-      <!-- Real-time cinematic lighting: bright, open shadows with warm/cool separation. -->
-      <!-- Keep the warm side key first: the existing cel shaders use its direction. -->
-      <TresDirectionalLight :position="[4.2, 5.0, 2.6]" :intensity="2.6" color="#FFF5E8" />
-      <!-- Soft ambient fill keeps the cleaning gestures clearly visible. -->
-      <TresAmbientLight :intensity="0.8" color="#E8EEFF" />
-      <!-- Cooler opposing fill preserves finger detail without flattening the key. -->
-      <TresDirectionalLight :position="[-3.5, 3.5, 2.0]" :intensity="0.7" color="#DCE6FF" />
-      <!-- A restrained back rim separates the silhouettes from the bright background. -->
-      <TresDirectionalLight :position="[-2.8, 4.6, -3.8]" :intensity="1.1" color="#EEF3FF" />
+      <!-- Neo-brutalist studio lighting: crisp directional key with deep, graphic block shadows -->
+      <!-- Keep the warm side key first: the cel shaders use directionalLights[0]. -->
+      <TresDirectionalLight :position="[4.2, 5.0, 2.6]" :intensity="1.55" color="#FFF2E4" />
+      <!-- Clean, controlled ambient fill so graphic block shadows retain strong contrast. -->
+      <TresAmbientLight :intensity="0.6" color="#E0E7FF" />
+      <!-- Subtle opposing cool fill for edge separation. -->
+      <TresDirectionalLight :position="[-3.5, 3.5, 2.0]" :intensity="0.45" color="#C7D2FE" />
+      <!-- Crisp back rim accentuating silhouette contours. -->
+      <TresDirectionalLight :position="[-2.8, 4.6, -3.8]" :intensity="0.55" color="#E2E8F0" />
       <OrbitControls :target="cameraTarget" :min-distance="0.65" :max-distance="6" />
       <primitive v-if="model?.scene" :object="model.scene" />
       <HandwashingWaterSystem :controller="controller" />

@@ -1012,7 +1012,16 @@ function visibleContactMotion(kind: ContactTechnique, active: ContactSide, phase
   // Keep the fitted stroke and its finger compensation together. A fuller
   // range makes the rubbing readable while the receiving hand stays steady.
   const motionWeight = weight * (kind === "knuckles" ? 1 : kind === "thumbs" ? .4 : .9);
-  return fittedContact(kind, active, phase, motionWeight);
+  const pose = fittedContact(kind, active, phase, motionWeight);
+  if (kind === "tips" && weight > 0.001) {
+    const f = pose[active].fingers;
+    const w = weight;
+    // Calibrated inward fingertip convergence ("kuncup") for step 6
+    f.pinky.jointSpreads = f.pinky.jointSpreads.map((s, i) => i === 1 ? s + 4 * w : s);
+    f.ring.jointSpreads = f.ring.jointSpreads.map((s, i) => i === 1 ? s + 2 * w : s);
+    f.thumb.jointCurls = f.thumb.jointCurls.map((c, i) => i === 1 ? c + 3 * w : c);
+  }
+  return pose;
 }
 
 function releasedContact(contact: StagePoseEvaluation, kind: ContactTechnique, active: ContactSide): StagePoseEvaluation {

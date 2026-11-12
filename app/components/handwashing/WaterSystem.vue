@@ -7,7 +7,6 @@ import SoapDispenser from "./SoapDispenser.vue";
 import FaucetStream from "./water/FaucetStream.vue";
 import HandWetness from "./water/HandWetness.vue";
 import SinkWaterSurface from "./water/SinkWaterSurface.vue";
-import SinkDrainFlow from "./water/SinkDrainFlow.vue";
 import WaterDroplets from "./water/WaterDroplets.vue";
 import { DEFAULT_WATER_CONFIG, type WaterSystemConfig } from "./water/waterConfig";
 import {
@@ -432,7 +431,6 @@ onUnmounted(() => {
   <FaucetStream />
   <HandWetness />
   <SinkWaterSurface />
-  <SinkDrainFlow />
   <SoapDispenser />
   <WaterDroplets />
 </template>

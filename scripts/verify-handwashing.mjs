@@ -507,10 +507,11 @@ for (const stage of HANDWASHING_STAGES) {
   console.log(`MEASURE: step-three entry skin clearance ${(entrySkinMin * 1000).toFixed(3)} scene mm across ${entrySamples} overlapping samples.`);
   // Fast playback includes damping; seeking directly to a clear pose alone
   // cannot detect a hand lagging behind its independently filtered fingers.
+  const interlaceDuration = HANDWASHING_STAGES.find(s => s.id === 'interlaceFingers').duration;
   for (const fps of [30, 60, 144]) {
     mapped.goToStage('interlaceFingers', true);
     let min = Infinity, max = -Infinity, samples = 0;
-    for (let frame = 1; frame < fps * 12; frame++) {
+    for (let frame = 1; frame < fps * interlaceDuration; frame++) {
       mapped.update(1 / fps);
       if (mapped.state.stageProgress < .30 || frame % Math.round(fps / 8) !== 0) continue;
       bakeCurrentSkin();

@@ -51,7 +51,7 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     startStageId: 'dispenseSoap',
     enabled: true,
     whoStepNumber: 1,
-    estimatedDuration: '10–15 detik',
+    estimatedDuration: '16 detik',
     movementPoints: [
       'Tekan pompa sabun dan tampung di telapak tangan.',
       'Tangkupkan kedua telapak tangan.',
@@ -70,7 +70,7 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     startStageId: 'rubBacksOfHands',
     enabled: true,
     whoStepNumber: 2,
-    estimatedDuration: '10–12 detik',
+    estimatedDuration: '9 detik',
     movementPoints: [
       'Letakkan telapak kanan di atas punggung tangan kiri.',
       'Selipkan jari ke sela-sela jari, lalu gosok.',
@@ -92,7 +92,7 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     startStageId: 'interlaceFingers',
     enabled: true,
     whoStepNumber: 3,
-    estimatedDuration: '10–12 detik',
+    estimatedDuration: '8 detik',
     movementPoints: [
       'Hadapkan kedua telapak tangan.',
       'Silangkan jari-jari kedua tangan.',
@@ -114,7 +114,7 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     startStageId: 'rubBacksOfFingers',
     enabled: true,
     whoStepNumber: 4,
-    estimatedDuration: '10 detik',
+    estimatedDuration: '8 detik',
     movementPoints: [
       'Kaitkan jari-jari kedua tangan hingga saling mengunci.',
       'Gosokkan ruas jari ke telapak tangan lawan.',
@@ -135,7 +135,7 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     startStageId: 'rubThumbs',
     enabled: true,
     whoStepNumber: 5,
-    estimatedDuration: '10 detik',
+    estimatedDuration: '9 detik',
     movementPoints: [
       'Genggam ibu jari kiri dengan tangan kanan.',
       'Putar sambil digosok.',
@@ -154,7 +154,7 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     startStageId: 'rubFingertips',
     enabled: true,
     whoStepNumber: 6,
-    estimatedDuration: '10 detik',
+    estimatedDuration: '9 detik',
     movementPoints: [
       'Kuncupkan ujung jari kanan, lalu putar di telapak kiri.',
       'Ganti dengan tangan satunya.',
