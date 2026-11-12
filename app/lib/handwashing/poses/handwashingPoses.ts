@@ -1372,9 +1372,21 @@ function evaluateBaseStagePose(
       return evaluateLateContact("tips", progress);
     }
     case "rinseHands": {
-      // Reuse the preparation rinse motion so the final wash uses the same
-      // hand placement and water contact as the initial wetting stage.
-      return evaluateStagePose("wetHands", progress, elapsed, anchors);
+      // Release the final fingertip contact into the preparation rinse pose
+      // before playing the full wetHands motion. This keeps the stage-6
+      // handoff continuous instead of snapping into the cupped pose.
+      const transitionWindow = 0.22;
+      if (progress <= transitionWindow) {
+        const from = evaluateStagePose("rubFingertips", 1, elapsed, anchors);
+        const to = evaluateStagePose("wetHands", 0, elapsed, anchors);
+        if (progress >= transitionWindow - 1e-9) return to;
+        const blend = smooth01(progress / transitionWindow);
+        if (blend <= 0) return from;
+        if (blend >= 1) return to;
+        return blendPair(from, to, blend);
+      }
+      const rinseProgress = (progress - transitionWindow) / (1 - transitionWindow);
+      return evaluateStagePose("wetHands", rinseProgress, elapsed, anchors);
     }
 
     case "finish": {

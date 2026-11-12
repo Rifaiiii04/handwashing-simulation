@@ -1043,6 +1043,17 @@ for (const [i, id] of lateStages.entries()) {
 const finalSection = HANDWASHING_SECTIONS.find(s => s.whoStepNumber === 6);
 assert.equal(finalSection.endStageIndex, HANDWASHING_STAGES.length - 1,
   'step six includes the final rinse and return stages');
+const rinseTransitionWindow = .22;
+apply('rubFingertips', 1);
+const fingertipEndpoint = snapshot();
+apply('rinseHands', 0);
+assert(maxDistance(fingertipEndpoint, snapshot()) < 1e-8,
+  'rinse starts from the final fingertip pose');
+apply('rinseHands', rinseTransitionWindow);
+const rinsePoseStart = snapshot();
+apply('wetHands', 0);
+assert(maxDistance(rinsePoseStart, snapshot()) < 1e-6,
+  'rinse handoff reaches the preparation rinse pose before continuing');
 for (const [before, after] of [['interlaceFingers', lateStages[0]], [lateStages[0], lateStages[1]], [lateStages[1], lateStages[2]]]) {
   apply(before, 1); const end = snapshot();
   apply(after, 0);
