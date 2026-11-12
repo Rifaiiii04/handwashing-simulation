@@ -5,10 +5,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createJiti } from 'jiti';
 
 const jiti = createJiti(import.meta.url, { fsCache: false });
-const { HandwashingSequenceController } = await jiti.import('../app/lib/handwashing/HandwashingSequenceController.ts');
-const { HANDWASHING_STAGES } = await jiti.import('../app/lib/handwashing/handwashingConfig.ts');
-const { evaluateStagePose } = await jiti.import('../app/lib/handwashing/handwashingPoses.ts');
-const { HANDWASHING_SECTIONS } = await jiti.import('../app/lib/handwashing/handwashingStepsData.ts');
+const { HandwashingSequenceController } = await jiti.import('../app/lib/handwashing/controllers/HandwashingSequenceController.ts');
+const { HANDWASHING_STAGES } = await jiti.import('../app/lib/handwashing/config/handwashingConfig.ts');
+const { evaluateStagePose } = await jiti.import('../app/lib/handwashing/poses/handwashingPoses.ts');
+const { HANDWASHING_SECTIONS } = await jiti.import('../app/lib/handwashing/config/handwashingStepsData.ts');
 
 // Run with: node scripts/verify-handwashing.mjs
 // Geometry/skeleton checks use the actual GLB. Textures are irrelevant to these

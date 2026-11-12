@@ -5,9 +5,9 @@ import {
   type MappedHandPairRig,
   type MappedHandRig,
   type MappedBoneJoint,
-} from "./handRigMapping";
-import type { HandPoseTarget, StagePoseEvaluation } from "./handwashingPoses";
-import type { DebugBoneOverride, DebugHandOverride, DebugStageOverride } from "./handPoseDebug";
+} from "../rig/handRigMapping";
+import type { HandPoseTarget, StagePoseEvaluation } from "../poses/handwashingPoses";
+import type { DebugBoneOverride, DebugHandOverride, DebugStageOverride } from "../rig/handPoseDebug";
 
 const DEG2RAD = Math.PI / 180;
 const scratchEuler = new THREE.Euler();

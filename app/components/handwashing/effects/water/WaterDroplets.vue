@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { inject, onMounted, onUnmounted } from "vue";
-import { createWaterDropletSystem } from "~/composables/useWaterParticles";
-import { WaterRuntimeKey, type WaterEffect } from "./waterRuntime";
+import { createWaterDropletSystem } from "~/lib/handwashing/water/useWaterParticles";
+import { WaterRuntimeKey, type WaterEffect } from "~/lib/handwashing/water/waterRuntime";
 
 const runtime = inject(WaterRuntimeKey);
 if (!runtime) throw new Error("WaterDroplets requires WaterSystem runtime");

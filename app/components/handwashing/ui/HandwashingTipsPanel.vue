@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { HandwashingStepSection } from '~/lib/handwashing/handwashingStepsData'
+import type { HandwashingStepSection } from '~/lib/handwashing/config/handwashingStepsData'
 
 defineProps<{
   section: HandwashingStepSection

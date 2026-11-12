@@ -8,9 +8,9 @@ import { createJiti } from 'jiti';
 // Measures the actual skinned GLB after final pose application. Baked XYZ
 // channels are not anatomical hinge angles, so flexion is measured in world space.
 const jiti = createJiti(import.meta.url, { fsCache: false });
-const { HandAnimationController } = await jiti.import('../app/lib/handwashing/HandAnimationController.ts');
-const { evaluateStagePose } = await jiti.import('../app/lib/handwashing/handwashingPoses.ts');
-const { HANDWASHING_STAGES, DEFAULT_HANDWASHING_CONFIG } = await jiti.import('../app/lib/handwashing/handwashingConfig.ts');
+const { HandAnimationController } = await jiti.import('../app/lib/handwashing/controllers/HandAnimationController.ts');
+const { evaluateStagePose } = await jiti.import('../app/lib/handwashing/poses/handwashingPoses.ts');
+const { HANDWASHING_STAGES, DEFAULT_HANDWASHING_CONFIG } = await jiti.import('../app/lib/handwashing/config/handwashingConfig.ts');
 const sides = ['right', 'left'], fingers = ['index', 'middle', 'ring', 'pinky'];
 const names = ['thumb', ...fingers], rad = Math.PI / 180;
 const tipY = { right: [.5528, .45402, .43552, .41136, .37604], left: [.47774, .43194, .40757, .32907, .34465] };

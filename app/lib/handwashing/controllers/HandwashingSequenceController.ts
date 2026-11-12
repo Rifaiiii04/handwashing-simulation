@@ -7,14 +7,14 @@ import {
   type HandwashingStageConfig,
   type HandwashingStageId,
   type HandwashingSystemConfig,
-} from "./handwashingConfig";
-import type { MappedHandPairRig } from "./handRigMapping";
-import { evaluateStagePose } from "./handwashingPoses";
+} from "../config/handwashingConfig";
+import type { MappedHandPairRig } from "../rig/handRigMapping";
+import { evaluateStagePose } from "../poses/handwashingPoses";
 import {
   captureDebugRig, createDebugStageOverride, validateDebugImport,
   type DebugMetrics, type DebugOverridesExport, type DebugStageOverride,
   type HandPoseDebugSettings, type HandPoseDebugSnapshot,
-} from "./handPoseDebug";
+} from "../rig/handPoseDebug";
 
 export interface HandwashingReactiveState {
   stageId: HandwashingStageId;

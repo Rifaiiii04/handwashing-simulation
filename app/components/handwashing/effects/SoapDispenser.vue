@@ -4,8 +4,8 @@ import * as THREE from "three";
 import {
   DEFAULT_SOAP_DISPENSER_CONFIG,
   type SoapDispenserConfig,
-} from "~/lib/handwashing/handwashingConfig";
-import { WaterRuntimeKey, type WaterEffect, type WaterFrameState } from "./water/waterRuntime";
+} from "~/lib/handwashing/config/handwashingConfig";
+import { WaterRuntimeKey, type WaterEffect, type WaterFrameState } from "~/lib/handwashing/water/waterRuntime";
 
 const props = defineProps<{
   config?: Partial<SoapDispenserConfig>;

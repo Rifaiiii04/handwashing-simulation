@@ -2,8 +2,8 @@
 import { inject, onMounted, onUnmounted } from "vue";
 import * as THREE from "three";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { WaterRuntimeKey, type WaterEffect } from "./waterRuntime";
-import { createWaterMaterial, disposeWaterMaterial, updateWaterMaterial } from "./waterMaterials";
+import { WaterRuntimeKey, type WaterEffect } from "~/lib/handwashing/water/waterRuntime";
+import { createWaterMaterial, disposeWaterMaterial, updateWaterMaterial } from "~/lib/handwashing/water/waterMaterials";
 
 const runtime = inject(WaterRuntimeKey);
 if (!runtime) throw new Error("SinkWaterSurface requires WaterSystem runtime");

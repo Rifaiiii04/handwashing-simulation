@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { inject, onMounted, onUnmounted } from "vue";
 import * as THREE from "three";
-import { WaterRuntimeKey, type WaterEffect, type WaterFrameState } from "./waterRuntime";
-import { createWaterMaterial, disposeWaterMaterial, updateWaterMaterial } from "./waterMaterials";
+import { WaterRuntimeKey, type WaterEffect, type WaterFrameState } from "~/lib/handwashing/water/waterRuntime";
+import { createWaterMaterial, disposeWaterMaterial, updateWaterMaterial } from "~/lib/handwashing/water/waterMaterials";
 
 const runtime = inject(WaterRuntimeKey)!;
 if (!runtime) throw new Error("HandWetness requires WaterSystem runtime");

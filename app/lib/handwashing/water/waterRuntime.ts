@@ -1,6 +1,6 @@
 import type { InjectionKey } from "vue";
 import type * as THREE from "three";
-import type { HandwashingParticleMode, HandwashingStageId } from "~/lib/handwashing/handwashingConfig";
+import type { HandwashingParticleMode, HandwashingStageId } from "~/lib/handwashing/config/handwashingConfig";
 import type { WaterSystemConfig } from "./waterConfig";
 
 export interface WaterFrameState {

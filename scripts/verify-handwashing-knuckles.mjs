@@ -8,9 +8,9 @@ import { createJiti } from 'jiti';
 // Full inter-hand skin checks supplement the small contact patches measured by
 // verify-handwashing-contact.mjs. This is an offline check, never a render loop.
 const jiti = createJiti(import.meta.url, { fsCache: false });
-const { HandAnimationController } = await jiti.import('../app/lib/handwashing/HandAnimationController.ts');
-const { evaluateStagePose } = await jiti.import('../app/lib/handwashing/handwashingPoses.ts');
-const { HANDWASHING_STAGES, DEFAULT_HANDWASHING_CONFIG } = await jiti.import('../app/lib/handwashing/handwashingConfig.ts');
+const { HandAnimationController } = await jiti.import('../app/lib/handwashing/controllers/HandAnimationController.ts');
+const { evaluateStagePose } = await jiti.import('../app/lib/handwashing/poses/handwashingPoses.ts');
+const { HANDWASHING_STAGES, DEFAULT_HANDWASHING_CONFIG } = await jiti.import('../app/lib/handwashing/config/handwashingConfig.ts');
 const anchors = { pumpStroke: 0, pumpPressProgress: 0 };
 const stageId = 'rubBacksOfFingers';
 const sides = ['right', 'left'];

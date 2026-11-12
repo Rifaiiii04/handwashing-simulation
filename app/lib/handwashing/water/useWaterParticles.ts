@@ -1,9 +1,9 @@
 import * as THREE from "three";
-import { DEFAULT_WATER_CONFIG, type WaterParticleConfig } from "~/components/handwashing/water/waterConfig";
-import type { WaterFrameState } from "~/components/handwashing/water/waterRuntime";
+import { DEFAULT_WATER_CONFIG, type WaterParticleConfig } from "~/lib/handwashing/water/waterConfig";
+import type { WaterFrameState } from "~/lib/handwashing/water/waterRuntime";
 
-export { DEFAULT_WATER_CONFIG } from "~/components/handwashing/water/waterConfig";
-export type { WaterParticleConfig, WaterSystemConfig } from "~/components/handwashing/water/waterConfig";
+export { DEFAULT_WATER_CONFIG } from "~/lib/handwashing/water/waterConfig";
+export type { WaterParticleConfig, WaterSystemConfig } from "~/lib/handwashing/water/waterConfig";
 
 interface Droplet {
   x: number;

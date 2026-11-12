@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import * as THREE from 'three'
-import type { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
-import type { HandwashingStageId } from '~/lib/handwashing/handwashingConfig'
+import type { HandwashingSequenceController } from '~/lib/handwashing/controllers/HandwashingSequenceController'
+import type { HandwashingStageId } from '~/lib/handwashing/config/handwashingConfig'
 
 const props = defineProps<{ controller: HandwashingSequenceController }>()
 const controller = props.controller

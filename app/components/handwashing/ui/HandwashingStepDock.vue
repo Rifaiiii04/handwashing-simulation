@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { HandwashingSequenceController } from '~/lib/handwashing/HandwashingSequenceController'
-import type { HandwashingStepSection } from '~/lib/handwashing/handwashingStepsData'
+import type { HandwashingSequenceController } from '~/lib/handwashing/controllers/HandwashingSequenceController'
+import type { HandwashingStepSection } from '~/lib/handwashing/config/handwashingStepsData'
 
 const props = defineProps<{
   controller: HandwashingSequenceController

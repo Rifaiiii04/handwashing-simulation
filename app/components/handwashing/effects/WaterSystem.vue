@@ -2,19 +2,19 @@
 import { onUnmounted, provide, watch } from "vue";
 import { useLoop, useTres } from "@tresjs/core";
 import * as THREE from "three";
-import { HandwashingSequenceController } from "~/lib/handwashing/HandwashingSequenceController";
+import { HandwashingSequenceController } from "~/lib/handwashing/controllers/HandwashingSequenceController";
 import SoapDispenser from "./SoapDispenser.vue";
 import FaucetStream from "./water/FaucetStream.vue";
 import HandWetness from "./water/HandWetness.vue";
 import SinkWaterSurface from "./water/SinkWaterSurface.vue";
 import WaterDroplets from "./water/WaterDroplets.vue";
-import { DEFAULT_WATER_CONFIG, type WaterSystemConfig } from "./water/waterConfig";
+import { DEFAULT_WATER_CONFIG, type WaterSystemConfig } from "~/lib/handwashing/water/waterConfig";
 import {
   WaterRuntimeKey,
   type WaterEffect,
   type WaterFrameState,
   type WaterRuntime,
-} from "./water/waterRuntime";
+} from "~/lib/handwashing/water/waterRuntime";
 
 const props = withDefaults(
   defineProps<{

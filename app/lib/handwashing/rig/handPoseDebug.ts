@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { MappedHandPairRig, MappedHandRig } from "./handRigMapping";
-import type { HandwashingStageId } from "./handwashingConfig";
+import type { HandwashingStageId } from "../config/handwashingConfig";
 
 export type DebugVector3 = [number, number, number];
 export type DebugSide = "right" | "left";

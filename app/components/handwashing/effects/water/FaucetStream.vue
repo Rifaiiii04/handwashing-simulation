@@ -5,12 +5,12 @@ import {
   WaterRuntimeKey,
   type WaterEffect,
   type WaterFrameState,
-} from "./waterRuntime";
+} from "~/lib/handwashing/water/waterRuntime";
 import {
   createWaterMaterial,
   disposeWaterMaterial,
   updateWaterMaterial,
-} from "./waterMaterials";
+} from "~/lib/handwashing/water/waterMaterials";
 
 const runtime = inject(WaterRuntimeKey);
 if (!runtime) throw new Error("FaucetStream requires WaterSystem runtime");

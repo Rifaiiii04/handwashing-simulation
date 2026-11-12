@@ -2,8 +2,8 @@
 import { onUnmounted } from "vue";
 import { useLoop, useTres } from "@tresjs/core";
 import * as THREE from "three";
-import type { HandwashingSequenceController } from "~/lib/handwashing/HandwashingSequenceController";
-import type { MappedHandPairRig, MappedHandRig } from "~/lib/handwashing/handRigMapping";
+import type { HandwashingSequenceController } from "~/lib/handwashing/controllers/HandwashingSequenceController";
+import type { MappedHandPairRig, MappedHandRig } from "~/lib/handwashing/rig/handRigMapping";
 
 const props = defineProps<{ controller: HandwashingSequenceController }>();
 const { scene } = useTres();
