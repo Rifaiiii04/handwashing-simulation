@@ -1372,61 +1372,18 @@ function evaluateBaseStagePose(
       return evaluateLateContact("tips", progress);
     }
     case "rinseHands": {
-      // 13a. Rinse hands: return to a relaxed, open position beneath the water stream
-      const rinseWave = Math.sin(elapsed * 4.8);
-      const rinseCos = Math.cos(elapsed * 4.8);
-      return {
-        right: {
-          palmOffset: [
-            -0.013 + Math.abs(rinseCos) * 0.012,
-            -0.006 + rinseWave * 0.01,
-            -0.075 + rinseWave * 0.018,
-          ],
-          palmEulerDeg: [14 + rinseWave * 3, -5, -42 + rinseWave * 16],
-          wristEulerDeg: [rinseWave * 4.5, 0, rinseCos * 3.5],
-          fingers: buildFingerSet(1 + rinseWave * 4, 1.2, elapsed * 5.8, 3.5),
-        },
-        left: {
-          palmOffset: [
-            0.013 - Math.abs(rinseCos) * 0.012,
-            -0.026 - rinseWave * 0.01,
-            -0.05 - rinseWave * 0.018,
-          ],
-          palmEulerDeg: [12 - rinseWave * 3, 0, 50 + rinseWave * 16],
-          wristEulerDeg: [-rinseWave * 4.5, 0, -rinseCos * 3.5],
-          fingers: buildFingerSet(1 - rinseWave * 4, 1.2, elapsed * 5.8 + Math.PI, 3.5),
-        },
-        contactCenterHintOffset: [-0.02, 0, -0.06],
-      };
+      // Reuse the preparation rinse motion so the final wash uses the same
+      // hand placement and water contact as the initial wetting stage.
+      return evaluateStagePose("wetHands", progress, elapsed, anchors);
     }
 
     case "finish": {
-      // 13b. Finish: gentle shake off of droplets, settling into a natural relaxed final pose
-      const settle = THREE.MathUtils.smoothstep(progress, 0.0, 0.65);
-      const dryShake = (1 - settle) * Math.sin(elapsed * 12.0) * 5;
-      return {
-        right: {
-          palmOffset: [
-            THREE.MathUtils.lerp(0.022, 0.05, settle),
-            THREE.MathUtils.lerp(-0.01, -0.04 + breathe * 0.005, settle),
-            THREE.MathUtils.lerp(-0.05, 0.12, settle),
-          ],
-          palmEulerDeg: [10 + dryShake * 0.3, -4, 16],
-          wristEulerDeg: [dryShake, 0, 0],
-          fingers: buildFingerSet(2 + dryShake * 0.4, 0.3, elapsed * 2.2, 1.2),
-        },
-        left: {
-          palmOffset: [
-            THREE.MathUtils.lerp(-0.022, -0.05, settle),
-            THREE.MathUtils.lerp(-0.01, -0.04 + breathe * 0.005, settle),
-            THREE.MathUtils.lerp(-0.03, 0.12, settle),
-          ],
-          palmEulerDeg: [8 - dryShake * 0.3, 2, -8],
-          wristEulerDeg: [-dryShake, 0, 0],
-          fingers: buildFingerSet(2 - dryShake * 0.4, 0.3, elapsed * 2.2 + 1.0, 1.2),
-        },
-        contactCenterHintOffset: [0, -0.04, 0.1],
-      };
+      // Reverse the preparation approach to bring both hands back to the
+      // exact idle/rest pose used before the sequence began.
+      const returning = evaluateStagePose("moveHandsToFaucet", 1 - progress, elapsed, anchors);
+      const settle = smooth01((progress - 0.78) / 0.22);
+      if (settle <= 0) return returning;
+      return blendPair(returning, evaluateStagePose("idle", 0, 0, anchors), settle);
     }
   }
 }

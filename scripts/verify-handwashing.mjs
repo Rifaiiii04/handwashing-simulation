@@ -995,7 +995,16 @@ console.log('PASS: background-tab delta clamp, invalid delta handling and bound-
   debugController.seek(.999);
   debugController.play();
   advance(debugController, 1);
-  assert.equal(debugController.state.isPlaying, false, 'the sixth technique completes normally');
+  assert.equal(debugController.state.stageId, 'rinseHands', 'the sixth technique flows into the final rinse');
+  assert.equal(debugController.state.isPlaying, true, 'the final rinse continues playback');
+  assert.equal(debugController.state.faucetActive, true);
+  assert.equal(debugController.state.particleMode, 'water');
+  advance(debugController, 8);
+  assert.equal(debugController.state.stageId, 'finish', 'the rinse flows into the return-to-rest stage');
+  assert.equal(debugController.state.isPlaying, false, 'the complete sequence stops after returning to rest');
+  assert.equal(debugController.state.stageProgress, 1);
+  assert.equal(debugController.state.faucetActive, false);
+  assert.equal(debugController.state.foamIntensity, 0);
   debugController.dispose();
 }
 console.log('PASS: debug world/local overrides, exact seek, snapshots, inspection selection, validated JSON roundtrip, atomic invalid import, reset/disable restoration, speed and stage loop.');
@@ -1018,7 +1027,7 @@ for (const [i, id] of lateStages.entries()) {
   assert.equal(stage.whoStep, i + 4);
   const section = HANDWASHING_SECTIONS.find(s => s.whoStepNumber === i + 4);
   assert(section.enabled && HANDWASHING_STAGES[section.startStageIndex].id === id);
-  assert.equal(section.startStageIndex, section.endStageIndex);
+  if (id !== 'rubFingertips') assert.equal(section.startStageIndex, section.endStageIndex);
   c.goToStage(id, false);
   c.seek(.35);
   assert(c.state.foamIntensity > .9);
@@ -1031,6 +1040,9 @@ for (const [i, id] of lateStages.entries()) {
     assert(maxDistance(before, snapshot()) < .0002, `${id}: continuous substage at ${p}`);
   }
 }
+const finalSection = HANDWASHING_SECTIONS.find(s => s.whoStepNumber === 6);
+assert.equal(finalSection.endStageIndex, HANDWASHING_STAGES.length - 1,
+  'step six includes the final rinse and return stages');
 for (const [before, after] of [['interlaceFingers', lateStages[0]], [lateStages[0], lateStages[1]], [lateStages[1], lateStages[2]]]) {
   apply(before, 1); const end = snapshot();
   apply(after, 0);

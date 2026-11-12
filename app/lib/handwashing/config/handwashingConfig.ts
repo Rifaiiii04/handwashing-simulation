@@ -237,6 +237,39 @@ export const HANDWASHING_STAGES: readonly HandwashingStageConfig[] = [
     triggersPump: false,
     emitsSoap: false,
   },
+  {
+    id: "rinseHands",
+    label: "Langkah 6 Â· Bilas Tangan sampai Bersih",
+    shortLabel: "6b. Bilas Tangan",
+    description:
+      "Bilas kedua tangan di bawah air mengalir sampai seluruh lather dan sisa sabun hilang.",
+    whoStep: 6,
+    duration: 5.0,
+    blendDuration: 0.4,
+    faucetActive: true,
+    foamStart: .95,
+    foamEnd: 0,
+    particleMode: "water",
+    particleIntensity: 0.85,
+    triggersPump: false,
+    emitsSoap: false,
+  },
+  {
+    id: "finish",
+    label: "Selesai Â· Kembali ke Posisi Awal",
+    shortLabel: "Selesai",
+    description:
+      "Setelah dibilas, kedua tangan kembali perlahan ke posisi awal.",
+    duration: 2.8,
+    blendDuration: 0.45,
+    faucetActive: false,
+    foamStart: 0,
+    foamEnd: 0,
+    particleMode: "none",
+    particleIntensity: 0,
+    triggersPump: false,
+    emitsSoap: false,
+  },
 ];
 
 export const SUBSEQUENT_WHO_STAGES: readonly HandwashingStageConfig[] = [];

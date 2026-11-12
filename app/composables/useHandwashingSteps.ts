@@ -12,7 +12,7 @@ function sectionIdForStage(stageIndex: number): SectionId | null {
   if (stageIndex === 5) return 'langkah3'
   if (stageIndex === 6) return 'langkah4'
   if (stageIndex === 7) return 'langkah5'
-  if (stageIndex === 8) return 'langkah6'
+  if (stageIndex >= 8) return 'langkah6'
   return null
 }
 

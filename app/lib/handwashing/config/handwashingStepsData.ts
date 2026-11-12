@@ -150,11 +150,11 @@ export const HANDWASHING_SECTIONS: readonly HandwashingStepSection[] = [
     subLabel: 'Gosok ujung jari & bilas',
     summary: 'Gosok ujung jari di telapak tangan, lalu bilas sampai bersih.',
     startStageIndex: 8,
-    endStageIndex: 8,
+    endStageIndex: 10,
     startStageId: 'rubFingertips',
     enabled: true,
     whoStepNumber: 6,
-    estimatedDuration: '9 detik',
+    estimatedDuration: '17 detik',
     movementPoints: [
       'Kuncupkan ujung jari kanan, lalu putar di telapak kiri.',
       'Ganti dengan tangan satunya.',
